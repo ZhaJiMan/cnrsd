@@ -155,23 +155,22 @@ DIAMETER_CLASSES_200 = np.array(
 )
 
 
-def _decode_section4_size(section4: bitarray) -> int:
-    return ba2int(section4[:24])
-
-
-def _decode_wmo_id(section4: bitarray) -> str:
+def _decode_wmo_station_id(section4: bitarray) -> str:
     block_number = ba2int(section4[32:39])
     station_number = ba2int(section4[39:49])
     return f"{block_number:02d}{station_number:03d}"
 
 
-def _decode_station_name(section4: bitarray) -> str:
-    return section4[49:209].tobytes().decode().rstrip("\x00")
+def _decode_local_station_id(section4: bitarray) -> str:
+    try:
+        return section4[49:209].tobytes().decode("ascii").rstrip("\x00")
+    except UnicodeDecodeError as e:
+        raise RSDDecodeError("0-01-192 描述符不是 ASCII 编码") from e
 
 
 def _decode_station_id(section4: bitarray) -> str:
-    # 优先使用 station_name，其次使用 wmo_id
-    return _decode_station_name(section4) or _decode_wmo_id(section4)
+    # 非 WMO 区站使用本地测站标识
+    return _decode_local_station_id(section4) or _decode_wmo_station_id(section4)
 
 
 def _decode_reference_time(section4: bitarray) -> datetime:
@@ -332,12 +331,13 @@ class RSD:
                 - section5_size
             )
             f.seek(f.tell() + section1_size + section3_size)
-            section4 = bitarray(f.read(section4_size))
+            section4 = f.read(section4_size)
 
             section5 = f.read(section5_size)
             if section5 != b"7777":
                 raise RSDDecodeError(f"section5 应该是 b'7777'，实际为 {section5}")
 
+        section4 = bitarray(section4)
         station_id = _decode_station_id(section4)
         ref_time = _decode_reference_time(section4)
         lon, lat = _decode_lonlat(section4)
