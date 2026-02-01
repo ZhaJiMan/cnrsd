@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from functools import cache
 from io import BytesIO
 from os import PathLike
-from typing import Any
+from typing import Any, Literal, TypeAlias, cast
 
 import numpy as np
 import pandas as pd
@@ -154,6 +155,24 @@ DIAMETER_CLASSES_200 = np.array(
     dtype=np.float64,
 )
 
+# 根据 BUFR 表格已知的常量
+_MISSING_VALUE = 2**16 - 1
+_TIME_INCREMENT = -5
+_SHORT_TIME_INCREMENT = 1
+_REP_FACTOR_7 = 5
+
+# section4 的大小不是固定的
+_HEADER_SIZE = 43
+_SECTION0_SIZE = 8
+_SECTION1_SIZE = 23
+_SECTION3_SIZE = 9
+_SECTION5_SIZE = 4
+_TRAILER_SIZE = 4
+
+
+class RSDDecodeError(Exception):
+    pass
+
 
 def _decode_wmo_station_id(section4: bitarray) -> str:
     block_number = ba2int(section4[32:39])
@@ -162,10 +181,13 @@ def _decode_wmo_station_id(section4: bitarray) -> str:
 
 
 def _decode_local_station_id(section4: bitarray) -> str:
+    data = section4[49:209].tobytes()
     try:
-        return section4[49:209].tobytes().decode("ascii").rstrip("\x00")
+        string = data.decode("ascii")
     except UnicodeDecodeError as e:
-        raise RSDDecodeError("0-01-192 描述符不是 ASCII 编码") from e
+        raise RSDDecodeError("0-01-192 的值应该是 ASCII 编码") from e
+
+    return string.rstrip("\x00")
 
 
 def _decode_station_id(section4: bitarray) -> str:
@@ -173,7 +195,7 @@ def _decode_station_id(section4: bitarray) -> str:
     return _decode_local_station_id(section4) or _decode_wmo_station_id(section4)
 
 
-def _decode_reference_time(section4: bitarray) -> datetime:
+def _decode_ref_time(section4: bitarray) -> datetime:
     year = ba2int(section4[293:305])
     month = ba2int(section4[305:309])
     day = ba2int(section4[309:315])
@@ -191,15 +213,62 @@ def _decode_lonlat(section4: bitarray) -> tuple[float, float]:
     i0, i1, i2 = 326, 351, 377
     lat = _decode_value(ba2int(section4[i0:i1]), 5, -9000000)
     lon = _decode_value(ba2int(section4[i1:i2]), 5, -18000000)
+
     return lon, lat
 
 
-def _decode_sensor_status(section4: bitarray) -> int:
-    return ba2int(section4[377:380])
+SensorStatus: TypeAlias = Literal[0, 1, 2, 3, 4, 5, 6, 7]
+DeviceType: TypeAlias = Literal[0, 1]
 
 
-def _decode_device_type(section4: bitarray) -> int:
-    return ba2int(section4[380:384])
+def _decode_sensor_status(section4: bitarray) -> SensorStatus:
+    sensor_status = ba2int(section4[377:380])
+    if sensor_status not in range(8):
+        raise RSDDecodeError(f"0-02-201 的值应该在 0-7 范围内，实际是 {sensor_status}")
+
+    return cast(SensorStatus, sensor_status)
+
+
+def _decode_device_type(section4: bitarray) -> DeviceType:
+    device_type = ba2int(section4[380:384])
+    if device_type not in {0, 1}:
+        raise RSDDecodeError(f"0-02-240 的值应该是 0 或 1，实际是 {device_type}")
+
+    return cast(DeviceType, device_type)
+
+
+def _decode_time_increment(section4: bitarray) -> float:
+    time_increment = _decode_value(ba2int(section4[385:397]), 0, -2048)
+    if not math.isclose(time_increment, _TIME_INCREMENT):
+        raise RSDDecodeError(
+            f"time_increment 的值应该是 {_TIME_INCREMENT}，实际是 {time_increment}"
+        )
+
+    return time_increment
+
+
+def _decode_short_time_increment(section4: bitarray) -> float:
+    short_time_increment = _decode_value(ba2int(section4[397:405]), 0, -128)
+    if not math.isclose(short_time_increment, _SHORT_TIME_INCREMENT):
+        raise RSDDecodeError(
+            f"short_time_increment 的值应该是 {_SHORT_TIME_INCREMENT}，实际是 {short_time_increment}"
+        )
+
+    return short_time_increment
+
+
+def _decode_rep_factor_11(section4: bitarray) -> Literal[0, 1]:
+    return cast(Literal[0, 1], section4[384])
+
+
+def _decode_rep_factor_7(section4: bitarray) -> Literal[5]:
+    rep_factor_7 = ba2int(section4[405:413])
+    if rep_factor_7 != _REP_FACTOR_7:
+        raise RSDDecodeError(
+            f"1-07-000 的值应该是 {_REP_FACTOR_7}，实际是 {rep_factor_7}"
+        )
+
+    return cast(Literal[5], rep_factor_7)
 
 
 @dataclass
@@ -224,28 +293,27 @@ def _decode_rsd_data(section4: bitarray, ref_time: datetime) -> _RSDData:
     rep_factor=0 时视为无雨，bufr 里为了节省空间没有存计数。但为了方便后续处理，
     插入一条 rain_flag=False, class_number=1, particle_number=0 的记录表示无雨
     """
-    # 这些量不从 bufr 中读取，而是使用常量
-    # 如果 bufr 格式真的发生变化，在 archive 侧检查数值是否合理
-    missing_value = 2**16 - 1
-    time_increment = -5 * 60
-    short_time_increment = 60
-    rep_factor_7 = 5
+    # obs_time 的单位是秒
+    obs_time = ref_time.timestamp() + _TIME_INCREMENT * 60
 
-    obs_time = ref_time.timestamp() + time_increment
-    rep_factor_11 = section4[384]
     rsd_data = _RSDData()
 
     # 插入空值
+    rep_factor_11 = _decode_rep_factor_11(section4)
     if rep_factor_11 == 0:
-        for _ in range(rep_factor_7):
-            obs_time += short_time_increment
+        for _ in range(_REP_FACTOR_7):
+            obs_time += _SHORT_TIME_INCREMENT * 60
             rsd_data.append(obs_time, False, 1, 0)
         return rsd_data
 
-    # 跳过读取 rep_factor_7 和时间增量
-    pos = 385 + 12 + 8 + 8
-    for _ in range(rep_factor_7):
-        obs_time += short_time_increment
+    # 通过解码检查常量的值是否符合预期，以防 BUFR 格式发生变化
+    time_increment = _decode_time_increment(section4)  # noqa: F841
+    short_time_increment = _decode_short_time_increment(section4)  # noqa: F841
+    rep_factor_7 = _decode_rep_factor_7(section4)  # noqa: F841
+
+    pos = 413
+    for _ in range(_REP_FACTOR_7):
+        obs_time += _SHORT_TIME_INCREMENT * 60
         rep_factor_5 = ba2int(section4[pos : pos + 16])
         pos += 16
 
@@ -255,20 +323,15 @@ def _decode_rsd_data(section4: bitarray, ref_time: datetime) -> _RSDData:
             continue
 
         for _ in range(rep_factor_5):
-            # 跳过读取质控码
+            # 因为质控码始终是 0，所以跳过读取
             i0, i1, i2, i3, i4 = pos, pos + 12, pos + 18, pos + 26, pos + 42  # noqa: F841
             class_number = ba2int(section4[i0:i1])
             particle_number = ba2int(section4[i3:i4])
-            # 跳过缺测的计数
-            if particle_number != missing_value:
+            if particle_number != _MISSING_VALUE:  # 跳过缺测
                 rsd_data.append(obs_time, True, class_number, particle_number)
             pos = i4
 
     return rsd_data
-
-
-class RSDDecodeError(Exception):
-    pass
 
 
 def _to_datetime64_us(timestamps: Sequence[float]) -> NDArray[np.datetime64]:
@@ -284,8 +347,8 @@ class RSD:
     station_id: str
     longitude: float
     latitude: float
-    sensor_status: int
-    device_type: int
+    sensor_status: SensorStatus
+    device_type: DeviceType
     reference_time: datetime
     observation_times: NDArray[np.datetime64] = field(repr=False)
     rain_flags: NDArray[np.bool_] = field(repr=False)
@@ -307,39 +370,32 @@ class RSD:
 
     @classmethod
     def from_bytes(cls, data: bytes):
-        header_size = 43
-        section0_size = 8
-        section1_size = 23
-        section3_size = 9
-        section5_size = 4
-        trailer_size = 4  # noqa: F841
-
         with BytesIO(data) as f:
-            f.seek(header_size)
-            section0 = f.read(section0_size)
+            f.seek(_HEADER_SIZE)
+            section0 = f.read(_SECTION0_SIZE)
             if section0[:4] != b"BUFR":
                 raise RSDDecodeError(
-                    f"section0 的开头应该是 b'BUFR'，实际为 {section0[:4]}"
+                    f"section0 的开头应该是 b'BUFR'，实际是 {section0[:4]}"
                 )
 
             bufr_size = int.from_bytes(section0[4:7], byteorder="big")
             section4_size = (
                 bufr_size
-                - section0_size
-                - section1_size
-                - section3_size
-                - section5_size
+                - _SECTION0_SIZE
+                - _SECTION1_SIZE
+                - _SECTION3_SIZE
+                - _SECTION5_SIZE
             )
-            f.seek(f.tell() + section1_size + section3_size)
+            f.seek(f.tell() + _SECTION1_SIZE + _SECTION3_SIZE)
             section4 = f.read(section4_size)
 
-            section5 = f.read(section5_size)
+            section5 = f.read(_SECTION5_SIZE)
             if section5 != b"7777":
-                raise RSDDecodeError(f"section5 应该是 b'7777'，实际为 {section5}")
+                raise RSDDecodeError(f"section5 的值应该是 b'7777'，实际是 {section5}")
 
         section4 = bitarray(section4)
         station_id = _decode_station_id(section4)
-        ref_time = _decode_reference_time(section4)
+        ref_time = _decode_ref_time(section4)
         lon, lat = _decode_lonlat(section4)
         sensor_status = _decode_sensor_status(section4)
         device_type = _decode_device_type(section4)
