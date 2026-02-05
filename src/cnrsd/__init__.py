@@ -7,153 +7,30 @@ from datetime import datetime, timezone
 from functools import cache
 from io import BytesIO
 from os import PathLike
-from typing import Any, Literal, TypeAlias, cast
+from typing import Any, Literal, NamedTuple, TypeAlias, TypedDict, cast
 
 import numpy as np
 import pandas as pd
 from bitarray import bitarray
 from bitarray.util import ba2int
-from numpy.typing import NDArray
+from numpy.typing import ArrayLike, NDArray
 
 __all__ = [
-    "DIAMETER_CLASSES_100",
-    "DIAMETER_CLASSES_200",
     "RSD",
-    "VELOCITY_CLASSES_100",
-    "VELOCITY_CLASSES_200",
+    "RSD_GRID_100",
+    "RSD_GRID_200",
+    "BinAxis",
+    "ClassParams",
+    "DeviceType",
     "RSDDecodeError",
+    "RSDDict",
+    "RSDGrid",
+    "SensorStatus",
+    "get_rsd_grid",
+    "lookup_class_params",
     "rsds_to_dataframe",
+    "rsds_to_dict",
 ]
-
-VELOCITY_CLASSES_100 = np.array(
-    [
-        (0.0, 0.1),
-        (0.1, 0.2),
-        (0.2, 0.3),
-        (0.3, 0.4),
-        (0.4, 0.5),
-        (0.5, 0.6),
-        (0.6, 0.7),
-        (0.7, 0.8),
-        (0.8, 0.9),
-        (0.9, 1.0),
-        (1.0, 1.2),
-        (1.2, 1.4),
-        (1.4, 1.6),
-        (1.6, 1.8),
-        (1.8, 2.0),
-        (2.0, 2.4),
-        (2.4, 2.8),
-        (2.8, 3.2),
-        (3.2, 3.6),
-        (3.6, 4.0),
-        (4.0, 4.8),
-        (4.8, 5.6),
-        (5.6, 6.4),
-        (6.4, 7.2),
-        (7.2, 8.0),
-        (8.0, 9.6),
-        (9.6, 11.2),
-        (11.2, 12.8),
-        (12.8, 14.4),
-        (14.4, 16.0),
-        (16.0, 19.2),
-        (19.2, 22.4),
-    ],
-    dtype=np.float64,
-)
-
-DIAMETER_CLASSES_100 = np.array(
-    [
-        (0.0, 0.125),
-        (0.125, 0.25),
-        (0.25, 0.375),
-        (0.375, 0.5),
-        (0.5, 0.625),
-        (0.625, 0.75),
-        (0.75, 0.875),
-        (0.875, 1.0),
-        (1.0, 1.125),
-        (1.125, 1.25),
-        (1.25, 1.5),
-        (1.5, 1.75),
-        (1.75, 2.0),
-        (2.0, 2.25),
-        (2.25, 2.5),
-        (2.5, 3.0),
-        (3.0, 3.5),
-        (3.5, 4.0),
-        (4.0, 4.5),
-        (4.5, 5.0),
-        (5.0, 6.0),
-        (6.0, 7.0),
-        (7.0, 8.0),
-        (8.0, 9.0),
-        (9.0, 10.0),
-        (10.0, 12.0),
-        (12.0, 14.0),
-        (14.0, 16.0),
-        (16.0, 18.0),
-        (18.0, 20.0),
-        (20.0, 23.0),
-        (23.0, 26.0),
-    ],
-    dtype=np.float64,
-)
-
-VELOCITY_CLASSES_200 = np.array(
-    [
-        (0.0, 0.2),
-        (0.2, 0.4),
-        (0.4, 0.6),
-        (0.6, 0.8),
-        (0.8, 1.0),
-        (1.0, 1.4),
-        (1.4, 1.8),
-        (1.8, 2.2),
-        (2.2, 2.6),
-        (2.6, 3.0),
-        (3.0, 3.4),
-        (3.4, 4.2),
-        (4.2, 5.0),
-        (5.0, 5.8),
-        (5.8, 6.6),
-        (6.6, 7.4),
-        (7.4, 8.2),
-        (8.2, 9.0),
-        (9.0, 10.0),
-        (10.0, 20.0),
-    ],
-    dtype=np.float64,
-)
-
-DIAMETER_CLASSES_200 = np.array(
-    [
-        (0.125, 0.25),
-        (0.25, 0.375),
-        (0.375, 0.5),
-        (0.5, 0.75),
-        (0.75, 1.0),
-        (1.0, 1.25),
-        (1.25, 1.5),
-        (1.5, 1.75),
-        (1.75, 2.0),
-        (2.0, 2.5),
-        (2.5, 3.0),
-        (3.0, 3.5),
-        (3.5, 4.0),
-        (4.0, 4.5),
-        (4.5, 5.0),
-        (5.0, 5.5),
-        (5.5, 6.0),
-        (6.0, 6.5),
-        (6.5, 7.0),
-        (7.0, 7.5),
-        (7.5, 8.0),
-        (8.0, np.inf),
-    ],
-    dtype=np.float64,
-)
 
 # 根据 BUFR 表格已知的常量
 _MISSING_VALUE = 2**16 - 1
@@ -168,6 +45,185 @@ _SECTION1_SIZE = 23
 _SECTION3_SIZE = 9
 _SECTION5_SIZE = 4
 _TRAILER_SIZE = 4
+
+
+@dataclass
+class BinAxis:
+    edges: NDArray[np.float64] = field(repr=False)
+    num_bins: int = field(init=False)
+    lower_bounds: NDArray[np.float64] = field(init=False, repr=False)
+    upper_bounds: NDArray[np.float64] = field(init=False, repr=False)
+    centers: NDArray[np.float64] = field(init=False, repr=False)
+    widths: NDArray[np.float64] = field(init=False, repr=False)
+
+    __hash__ = None  # pyright: ignore[reportAssignmentType]
+
+    @classmethod
+    def from_edges(cls, edges: Sequence[float] | NDArray[np.floating]):
+        return cls(np.asarray(edges, dtype=np.float64))
+
+    def __post_init__(self) -> None:
+        assert self.edges.ndim == 1 and len(self.edges) >= 2
+        self.num_bins = len(self.edges) - 1
+        self.lower_bounds = self.edges[:-1]
+        self.upper_bounds = self.edges[1:]
+        self.centers = (self.edges[:-1] + self.edges[1:]) / 2
+        self.widths = self.edges[1:] - self.edges[:-1]
+
+
+@dataclass
+class RSDGrid:
+    velocity: BinAxis
+    diameter: BinAxis
+    shape: tuple[int, int] = field(init=False, repr=False, compare=False)
+    num_classes: int = field(init=False, repr=False, compare=False)
+
+    __hash__ = None  # pyright: ignore[reportAssignmentType]
+
+    def __post_init__(self) -> None:
+        self.shape = (self.velocity.num_bins, self.diameter.num_bins)
+        self.num_classes = self.shape[0] * self.shape[1]
+
+
+RSD_GRID_100 = RSDGrid(
+    velocity=BinAxis.from_edges(
+        [
+            0.0,
+            0.1,
+            0.2,
+            0.3,
+            0.4,
+            0.5,
+            0.6,
+            0.7,
+            0.8,
+            0.9,
+            1.0,
+            1.2,
+            1.4,
+            1.6,
+            1.8,
+            2.0,
+            2.4,
+            2.8,
+            3.2,
+            3.6,
+            4.0,
+            4.8,
+            5.6,
+            6.4,
+            7.2,
+            8.0,
+            9.6,
+            11.2,
+            12.8,
+            14.4,
+            16.0,
+            19.2,
+            22.4,
+        ]
+    ),
+    diameter=BinAxis.from_edges(
+        [
+            0.0,
+            0.125,
+            0.25,
+            0.375,
+            0.5,
+            0.625,
+            0.75,
+            0.875,
+            1.0,
+            1.125,
+            1.25,
+            1.5,
+            1.75,
+            2.0,
+            2.25,
+            2.5,
+            3.0,
+            3.5,
+            4.0,
+            4.5,
+            5.0,
+            6.0,
+            7.0,
+            8.0,
+            9.0,
+            10.0,
+            12.0,
+            14.0,
+            16.0,
+            18.0,
+            20.0,
+            23.0,
+            26.0,
+        ]
+    ),
+)
+
+RSD_GRID_200 = RSDGrid(
+    velocity=BinAxis.from_edges(
+        [
+            0.0,
+            0.2,
+            0.4,
+            0.6,
+            0.8,
+            1.0,
+            1.4,
+            1.8,
+            2.2,
+            2.6,
+            3.0,
+            3.4,
+            4.2,
+            5.0,
+            5.8,
+            6.6,
+            7.4,
+            8.2,
+            9.0,
+            10.0,
+            20.0,
+        ]
+    ),
+    diameter=BinAxis.from_edges(
+        [
+            0.125,
+            0.25,
+            0.375,
+            0.5,
+            0.75,
+            1.0,
+            1.25,
+            1.5,
+            1.75,
+            2.0,
+            2.5,
+            3.0,
+            3.5,
+            4.0,
+            4.5,
+            5.0,
+            5.5,
+            6.0,
+            6.5,
+            7.0,
+            7.5,
+            8.0,
+            9.0,  # 用 9.0 替代 inf
+        ]
+    ),
+)
+
+
+SensorStatus: TypeAlias = Literal[0, 1, 2, 3, 4, 5, 6, 7]
+DeviceType: TypeAlias = Literal[0, 1]
+
+
+def get_rsd_grid(device_type: DeviceType) -> RSDGrid:
+    return RSD_GRID_100 if device_type == 0 else RSD_GRID_200
 
 
 class RSDDecodeError(Exception):
@@ -217,14 +273,12 @@ def _decode_lonlat(section4: bitarray) -> tuple[float, float]:
     return lon, lat
 
 
-SensorStatus: TypeAlias = Literal[0, 1, 2, 3, 4, 5, 6, 7]
-DeviceType: TypeAlias = Literal[0, 1]
-
-
 def _decode_sensor_status(section4: bitarray) -> SensorStatus:
     sensor_status = ba2int(section4[377:380])
     if sensor_status not in range(8):
-        raise RSDDecodeError(f"0-02-201 的值应该在 0-7 范围内，实际是 {sensor_status}")
+        raise RSDDecodeError(
+            f"0-02-201 的值应该在 0 到 7 范围内，实际是 {sensor_status}"
+        )
 
     return cast(SensorStatus, sensor_status)
 
@@ -251,7 +305,8 @@ def _decode_short_time_increment(section4: bitarray) -> float:
     short_time_increment = _decode_value(ba2int(section4[397:405]), 0, -128)
     if not math.isclose(short_time_increment, _SHORT_TIME_INCREMENT):
         raise RSDDecodeError(
-            f"short_time_increment 的值应该是 {_SHORT_TIME_INCREMENT}，实际是 {short_time_increment}"
+            f"short_time_increment 的值应该是 {_SHORT_TIME_INCREMENT}，"
+            f"实际是 {short_time_increment}"
         )
 
     return short_time_increment
@@ -272,7 +327,7 @@ def _decode_rep_factor_7(section4: bitarray) -> Literal[5]:
 
 
 @dataclass
-class _RSDData:
+class _RSDBody:
     observation_times: list[float] = field(default_factory=list)
     rain_flags: list[bool] = field(default_factory=list)
     class_numbers: list[int] = field(default_factory=list)
@@ -287,7 +342,7 @@ class _RSDData:
         self.particle_numbers.append(particle_number)
 
 
-def _decode_rsd_data(section4: bitarray, ref_time: datetime) -> _RSDData:
+def _decode_rsd_body(section4: bitarray, ref_time: datetime) -> _RSDBody:
     """
     particle_number 的位数全 1 时即缺测，跳过缺测的记录。
     rep_factor=0 时视为无雨，bufr 里为了节省空间没有存计数。但为了方便后续处理，
@@ -296,15 +351,14 @@ def _decode_rsd_data(section4: bitarray, ref_time: datetime) -> _RSDData:
     # obs_time 的单位是秒
     obs_time = ref_time.timestamp() + _TIME_INCREMENT * 60
 
-    rsd_data = _RSDData()
-
     # 插入空值
+    rsd_body = _RSDBody()
     rep_factor_11 = _decode_rep_factor_11(section4)
     if rep_factor_11 == 0:
         for _ in range(_REP_FACTOR_7):
             obs_time += _SHORT_TIME_INCREMENT * 60
-            rsd_data.append(obs_time, False, 1, 0)
-        return rsd_data
+            rsd_body.append(obs_time, False, 1, 0)
+        return rsd_body
 
     # 通过解码检查常量的值是否符合预期，以防 BUFR 格式发生变化
     time_increment = _decode_time_increment(section4)  # noqa: F841
@@ -319,7 +373,7 @@ def _decode_rsd_data(section4: bitarray, ref_time: datetime) -> _RSDData:
 
         # 插入空值
         if rep_factor_5 == 0:
-            rsd_data.append(obs_time, False, 1, 0)
+            rsd_body.append(obs_time, False, 1, 0)
             continue
 
         for _ in range(rep_factor_5):
@@ -328,21 +382,21 @@ def _decode_rsd_data(section4: bitarray, ref_time: datetime) -> _RSDData:
             class_number = ba2int(section4[i0:i1])
             particle_number = ba2int(section4[i3:i4])
             if particle_number != _MISSING_VALUE:  # 跳过缺测
-                rsd_data.append(obs_time, True, class_number, particle_number)
+                rsd_body.append(obs_time, True, class_number, particle_number)
             pos = i4
 
-    return rsd_data
+    return rsd_body
 
 
 def _to_datetime64_us(timestamps: Sequence[float]) -> NDArray[np.datetime64]:
     return (
-        (np.array(timestamps, dtype=np.float64) * 1e9)
+        (np.array(timestamps, dtype=np.float64) * 1e6)
         .astype(np.int64)
         .astype("datetime64[us]")
     )
 
 
-@dataclass(eq=False)
+@dataclass
 class RSD:
     station_id: str
     longitude: float
@@ -350,23 +404,29 @@ class RSD:
     sensor_status: SensorStatus
     device_type: DeviceType
     reference_time: datetime
+    num_records: int = field(init=False)
     observation_times: NDArray[np.datetime64] = field(repr=False)
     rain_flags: NDArray[np.bool_] = field(repr=False)
     class_numbers: NDArray[np.int64] = field(repr=False)
     particle_numbers: NDArray[np.int64] = field(repr=False)
 
+    __hash__ = None  # pyright: ignore[reportAssignmentType]
+
     def __post_init__(self) -> None:
+        self.num_records = len(self.observation_times)
+        assert len(self.rain_flags) == self.num_records
+        assert len(self.class_numbers) == self.num_records
+        assert len(self.particle_numbers) == self.num_records
+
         # 存在 device_type 跟 class_number 不匹配的情况
-        if self.class_numbers.size > 0:
-            if self.device_type == 0:
-                velocity_classes = VELOCITY_CLASSES_100
-                diameter_classes = DIAMETER_CLASSES_100
-            else:
-                velocity_classes = VELOCITY_CLASSES_200
-                diameter_classes = DIAMETER_CLASSES_200
-            num_classes = len(velocity_classes) * len(diameter_classes)
-            if self.class_numbers.max() > num_classes:
-                raise RSDDecodeError("class_number out of range")
+        if self.num_records > 0:
+            rsd_grid = get_rsd_grid(self.device_type)
+            max_class_number = self.class_numbers.max()
+            if max_class_number > rsd_grid.num_classes:
+                raise RSDDecodeError(
+                    f"class_number 的最大值 {max_class_number} 超过了"
+                    f"device_type={self.device_type} 允许的上限 {rsd_grid.num_classes}"
+                )
 
     @classmethod
     def from_bytes(cls, data: bytes):
@@ -399,7 +459,7 @@ class RSD:
         lon, lat = _decode_lonlat(section4)
         sensor_status = _decode_sensor_status(section4)
         device_type = _decode_device_type(section4)
-        rsd_data = _decode_rsd_data(section4, ref_time)
+        rsd_body = _decode_rsd_body(section4, ref_time)
 
         return cls(
             station_id=station_id,
@@ -408,10 +468,10 @@ class RSD:
             sensor_status=sensor_status,
             device_type=device_type,
             reference_time=ref_time,
-            observation_times=_to_datetime64_us(rsd_data.observation_times),
-            rain_flags=np.array(rsd_data.rain_flags, dtype=np.bool_),
-            class_numbers=np.array(rsd_data.class_numbers, dtype=np.int64),
-            particle_numbers=np.array(rsd_data.particle_numbers, dtype=np.int64),
+            observation_times=_to_datetime64_us(rsd_body.observation_times),
+            rain_flags=np.array(rsd_body.rain_flags, dtype=np.bool_),
+            class_numbers=np.array(rsd_body.class_numbers, dtype=np.int64),
+            particle_numbers=np.array(rsd_body.particle_numbers, dtype=np.int64),
         )
 
     @classmethod
@@ -420,86 +480,123 @@ class RSD:
         with open(filepath, mode="rb") as f:
             return cls.from_bytes(f.read())
 
+    def to_dict(self) -> RSDDict:
+        return rsds_to_dict([self])
+
     def to_dataframe(self) -> pd.DataFrame:
         return rsds_to_dataframe([self])
 
 
-_DTYPE_MAP = {
-    "station_id": "object",
-    "longitude": "float64",
-    "latitude": "float64",
-    "time": "datetime64[us, UTC]",
-    "sensor_status": "int64",
-    "device_type": "int64",
-    "rain_flag": "bool",
-    "class_number": "int64",
-    "particle_number": "int64",
-    "velocity_min": "float64",
-    "velocity_max": "float64",
-    "diameter_min": "float64",
-    "diameter_max": "float64",
-}
+def _vstack_bin_params(bin_axis: BinAxis) -> NDArray[np.float64]:
+    return np.column_stack(
+        (
+            bin_axis.lower_bounds,
+            bin_axis.upper_bounds,
+            bin_axis.centers,
+            bin_axis.widths,
+        )
+    )
 
 
-@cache
-def _make_empty_dataframe() -> pd.DataFrame:
-    cols = pd.Index(list(_DTYPE_MAP.keys()))
-    return pd.DataFrame(columns=cols).astype(_DTYPE_MAP)
+def _make_class_params(rsd_grid: RSDGrid) -> NDArray[np.float64]:
+    class_indices = np.arange(rsd_grid.num_classes)
+    velocity_indices, diameter_indices = np.divmod(class_indices, rsd_grid.shape[1])
+    velocity_params = _vstack_bin_params(rsd_grid.velocity)[velocity_indices, :]
+    diameter_params = _vstack_bin_params(rsd_grid.diameter)[diameter_indices, :]
+    class_params = np.hstack([velocity_params, diameter_params])
 
-
-def _pluck(iterable: Iterable[Any], name: str) -> list[Any]:
-    return [getattr(obj, name) for obj in iterable]
-
-
-def _make_class_product(
-    velocity_classes: NDArray[np.float64], diameter_classes: NDArray[np.float64]
-) -> NDArray[np.float64]:
-    num_rows = len(velocity_classes)
-    num_cols = len(diameter_classes)
-    class_indices = np.arange(num_rows * num_cols)
-    velocity_indices, diameter_indices = np.divmod(class_indices, num_cols)
-    velocity_classes = velocity_classes[velocity_indices]
-    diameter_classes = diameter_classes[diameter_indices]
-    class_product = np.hstack([velocity_classes, diameter_classes])
-
-    return class_product
+    return class_params
 
 
 @cache
 def _get_class_table() -> NDArray[np.float64]:
     return np.vstack(
-        [
-            _make_class_product(VELOCITY_CLASSES_100, DIAMETER_CLASSES_100),
-            _make_class_product(VELOCITY_CLASSES_200, DIAMETER_CLASSES_200),
-        ]
+        (_make_class_params(RSD_GRID_100), _make_class_params(RSD_GRID_200))
     )
 
 
-def _lookup_class_table(
-    device_types: NDArray[np.int64], class_numbers: NDArray[np.int64]
-) -> NDArray[np.float64]:
+class ClassParams(NamedTuple):
+    velocity_lower_bounds: NDArray[np.float64]
+    velocity_upper_bounds: NDArray[np.float64]
+    velocity_centers: NDArray[np.float64]
+    velocity_widths: NDArray[np.float64]
+    diameter_lower_bounds: NDArray[np.float64]
+    diameter_upper_bounds: NDArray[np.float64]
+    diameter_centers: NDArray[np.float64]
+    diameter_widths: NDArray[np.float64]
+
+    __hash__ = None  # pyright: ignore[reportAssignmentType]
+
+
+def lookup_class_params(device_type: ArrayLike, class_number: ArrayLike) -> ClassParams:
+    device_type = np.atleast_1d(np.asarray(device_type))
+    if not ((device_type == 0) | (device_type == 1)).all():
+        raise ValueError("device_type 的值只能取 0 或 1")
+
+    # np.where 会进行广播
+    class_indices = np.atleast_1d(np.asarray(class_number, dtype=np.intp)) - 1
+    class_indices = np.where(
+        device_type.astype(np.bool_),
+        class_indices + RSD_GRID_100.num_classes,
+        class_indices,
+    )
+
     class_table = _get_class_table()
-    num_classes_100 = len(VELOCITY_CLASSES_100) * len(DIAMETER_CLASSES_100)
-    class_indices = class_numbers - 1
-    class_indices[device_types.astype(np.bool_)] += num_classes_100
-    class_product = class_table[class_indices]
+    try:
+        # advanced indexing 返回 copy
+        class_params = class_table[class_indices, :]
+    except IndexError as e:
+        raise IndexError("class_number 的值超过了 device_type 允许的上限") from e
+    args = (class_params[..., i] for i in range(class_params.shape[-1]))
 
-    return class_product
+    return ClassParams(*args)
 
 
-def rsds_to_dataframe(rsds: Sequence[RSD]) -> pd.DataFrame:
-    """将多个 RSD 对象转换为 dataframe"""
+# 貌似比 attrgetter + zip 要快一点
+def _pluck(iterable: Iterable[object], name: str) -> list[Any]:
+    return [getattr(obj, name) for obj in iterable]
+
+
+class RSDDict(TypedDict):
+    station_id: NDArray[np.str_]
+    longitude: NDArray[np.float64]
+    latitude: NDArray[np.float64]
+    time: NDArray[np.datetime64]
+    sensor_status: NDArray[np.int64]
+    device_type: NDArray[np.int64]
+    rain_flag: NDArray[np.bool_]
+    class_number: NDArray[np.int64]
+    particle_number: NDArray[np.int64]
+    velocity_center: NDArray[np.float64]
+    velocity_width: NDArray[np.float64]
+    diameter_center: NDArray[np.float64]
+    diameter_width: NDArray[np.float64]
+
+
+def rsds_to_dict(rsds: Sequence[RSD]) -> RSDDict:
     # 需要提前处理空列表，否则后面的 repeat 和 concatenate 会报错
-    if len(rsds) == 0:
-        return _make_empty_dataframe()
-    repeats = np.array([len(rsd.observation_times) for rsd in rsds], dtype=np.int64)
-    if (repeats == 0).all():
-        return _make_empty_dataframe()
+    repeats = [rsd.num_records for rsd in rsds]
+    if sum(repeats) == 0:
+        return {
+            "station_id": np.array([], dtype=np.str_),
+            "longitude": np.array([], dtype=np.float64),
+            "latitude": np.array([], dtype=np.float64),
+            "time": np.array([], dtype=np.datetime64),
+            "sensor_status": np.array([], dtype=np.int64),
+            "device_type": np.array([], dtype=np.int64),
+            "rain_flag": np.array([], dtype=np.bool_),
+            "class_number": np.array([], dtype=np.int64),
+            "particle_number": np.array([], dtype=np.int64),
+            "velocity_center": np.array([], dtype=np.float64),
+            "velocity_width": np.array([], dtype=np.float64),
+            "diameter_center": np.array([], dtype=np.float64),
+            "diameter_width": np.array([], dtype=np.float64),
+        }
 
-    # 省略 ref_time 字段
+    repeats = np.array(repeats, dtype=np.int64)
     data = {
         "station_id": np.repeat(
-            np.array(_pluck(rsds, "station_id"), dtype=np.object_), repeats
+            np.array(_pluck(rsds, "station_id"), dtype=np.str_), repeats
         ),
         "longitude": np.repeat(
             np.array(_pluck(rsds, "longitude"), dtype=np.float64), repeats
@@ -507,10 +604,7 @@ def rsds_to_dataframe(rsds: Sequence[RSD]) -> pd.DataFrame:
         "latitude": np.repeat(
             np.array(_pluck(rsds, "latitude"), dtype=np.float64), repeats
         ),
-        "time": pd.Series(
-            np.concatenate(_pluck(rsds, "observation_times")),
-            dtype="datetime64[us, UTC]",
-        ),
+        "time": np.concatenate(_pluck(rsds, "observation_times")),
         "sensor_status": np.repeat(
             np.array(_pluck(rsds, "sensor_status"), dtype=np.int64), repeats
         ),
@@ -522,11 +616,15 @@ def rsds_to_dataframe(rsds: Sequence[RSD]) -> pd.DataFrame:
         "particle_number": np.concatenate(_pluck(rsds, "particle_numbers")),
     }
 
-    class_product = _lookup_class_table(data["device_type"], data["class_number"])
-    data["velocity_min"] = class_product[:, 0]
-    data["velocity_max"] = class_product[:, 1]
-    data["diameter_min"] = class_product[:, 2]
-    data["diameter_max"] = class_product[:, 3]
-    df = pd.DataFrame(data).astype(_DTYPE_MAP)
+    class_params = lookup_class_params(data["device_type"], data["class_number"])
+    data["velocity_center"] = class_params.velocity_centers
+    data["velocity_width"] = class_params.velocity_widths
+    data["diameter_center"] = class_params.diameter_centers
+    data["diameter_width"] = class_params.diameter_widths
 
-    return df
+    return cast(RSDDict, data)
+
+
+def rsds_to_dataframe(rsds: Sequence[RSD]) -> pd.DataFrame:
+    """将多个 RSD 对象转换为 dataframe"""
+    return pd.DataFrame(rsds_to_dict(rsds))
