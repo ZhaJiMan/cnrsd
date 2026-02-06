@@ -328,15 +328,15 @@ def _decode_rep_factor_7(section4: bitarray) -> Literal[5]:
 
 @dataclass
 class _RSDBody:
-    observation_times: list[float] = field(default_factory=list)
+    times: list[float] = field(default_factory=list)
     rain_flags: list[bool] = field(default_factory=list)
     class_numbers: list[int] = field(default_factory=list)
     particle_numbers: list[int] = field(default_factory=list)
 
     def append(
-        self, obs_time: float, rain_flag: bool, class_number: int, particle_number: int
+        self, time: float, rain_flag: bool, class_number: int, particle_number: int
     ) -> None:
-        self.observation_times.append(obs_time)
+        self.times.append(time)
         self.rain_flags.append(rain_flag)
         self.class_numbers.append(class_number)
         self.particle_numbers.append(particle_number)
@@ -348,16 +348,16 @@ def _decode_rsd_body(section4: bitarray, ref_time: datetime) -> _RSDBody:
     rep_factor=0 时视为无雨，bufr 里为了节省空间没有存计数。但为了方便后续处理，
     插入一条 rain_flag=False, class_number=1, particle_number=0 的记录表示无雨
     """
-    # obs_time 的单位是秒
-    obs_time = ref_time.timestamp() + _TIME_INCREMENT * 60
+    # time 的单位是秒
+    time = ref_time.timestamp() + _TIME_INCREMENT * 60
 
     # 插入空值
     rsd_body = _RSDBody()
     rep_factor_11 = _decode_rep_factor_11(section4)
     if rep_factor_11 == 0:
         for _ in range(_REP_FACTOR_7):
-            obs_time += _SHORT_TIME_INCREMENT * 60
-            rsd_body.append(obs_time, False, 1, 0)
+            time += _SHORT_TIME_INCREMENT * 60
+            rsd_body.append(time, False, 1, 0)
         return rsd_body
 
     # 通过解码检查常量的值是否符合预期，以防 BUFR 格式发生变化
@@ -367,13 +367,13 @@ def _decode_rsd_body(section4: bitarray, ref_time: datetime) -> _RSDBody:
 
     pos = 413
     for _ in range(_REP_FACTOR_7):
-        obs_time += _SHORT_TIME_INCREMENT * 60
+        time += _SHORT_TIME_INCREMENT * 60
         rep_factor_5 = ba2int(section4[pos : pos + 16])
         pos += 16
 
         # 插入空值
         if rep_factor_5 == 0:
-            rsd_body.append(obs_time, False, 1, 0)
+            rsd_body.append(time, False, 1, 0)
             continue
 
         for _ in range(rep_factor_5):
@@ -382,15 +382,15 @@ def _decode_rsd_body(section4: bitarray, ref_time: datetime) -> _RSDBody:
             class_number = ba2int(section4[i0:i1])
             particle_number = ba2int(section4[i3:i4])
             if particle_number != _MISSING_VALUE:  # 跳过缺测
-                rsd_body.append(obs_time, True, class_number, particle_number)
+                rsd_body.append(time, True, class_number, particle_number)
             pos = i4
 
     return rsd_body
 
 
-def _to_datetime64_us(timestamps: Sequence[float]) -> NDArray[np.datetime64]:
+def _to_datetime64_us(times: Sequence[float]) -> NDArray[np.datetime64]:
     return (
-        (np.array(timestamps, dtype=np.float64) * 1e6)
+        (np.array(times, dtype=np.float64) * 1e6)
         .astype(np.int64)
         .astype("datetime64[us]")
     )
@@ -403,17 +403,16 @@ class RSD:
     latitude: float
     sensor_status: SensorStatus
     device_type: DeviceType
-    reference_time: datetime
-    num_records: int = field(init=False)
-    observation_times: NDArray[np.datetime64] = field(repr=False)
+    times: NDArray[np.datetime64] = field(repr=False)
     rain_flags: NDArray[np.bool_] = field(repr=False)
     class_numbers: NDArray[np.int64] = field(repr=False)
     particle_numbers: NDArray[np.int64] = field(repr=False)
+    num_records: int = field(init=False)
 
     __hash__ = None  # pyright: ignore[reportAssignmentType]
 
     def __post_init__(self) -> None:
-        self.num_records = len(self.observation_times)
+        self.num_records = len(self.times)
         assert len(self.rain_flags) == self.num_records
         assert len(self.class_numbers) == self.num_records
         assert len(self.particle_numbers) == self.num_records
@@ -467,8 +466,7 @@ class RSD:
             latitude=lat,
             sensor_status=sensor_status,
             device_type=device_type,
-            reference_time=ref_time,
-            observation_times=_to_datetime64_us(rsd_body.observation_times),
+            times=_to_datetime64_us(rsd_body.times),
             rain_flags=np.array(rsd_body.rain_flags, dtype=np.bool_),
             class_numbers=np.array(rsd_body.class_numbers, dtype=np.int64),
             particle_numbers=np.array(rsd_body.particle_numbers, dtype=np.int64),
@@ -529,6 +527,7 @@ class ClassParams(NamedTuple):
 
 
 def lookup_class_params(device_type: ArrayLike, class_number: ArrayLike) -> ClassParams:
+    # np.atleast_1d 保证结果是一维数组
     device_type = np.atleast_1d(np.asarray(device_type))
     if not ((device_type == 0) | (device_type == 1)).all():
         raise ValueError("device_type 的值只能取 0 或 1")
@@ -542,6 +541,7 @@ def lookup_class_params(device_type: ArrayLike, class_number: ArrayLike) -> Clas
     )
 
     class_table = _get_class_table()
+
     try:
         # advanced indexing 返回 copy
         class_params = class_table[class_indices, :]
@@ -552,7 +552,6 @@ def lookup_class_params(device_type: ArrayLike, class_number: ArrayLike) -> Clas
     return ClassParams(*args)
 
 
-# 貌似比 attrgetter + zip 要快一点
 def _pluck(iterable: Iterable[object], name: str) -> list[Any]:
     return [getattr(obj, name) for obj in iterable]
 
@@ -593,6 +592,7 @@ def rsds_to_dict(rsds: Sequence[RSD]) -> RSDDict:
             "diameter_width": np.array([], dtype=np.float64),
         }
 
+    # 貌似 pluck 比 attrgetter + zip 要快一点
     repeats = np.array(repeats, dtype=np.int64)
     data = {
         "station_id": np.repeat(
@@ -604,7 +604,7 @@ def rsds_to_dict(rsds: Sequence[RSD]) -> RSDDict:
         "latitude": np.repeat(
             np.array(_pluck(rsds, "latitude"), dtype=np.float64), repeats
         ),
-        "time": np.concatenate(_pluck(rsds, "observation_times")),
+        "time": np.concatenate(_pluck(rsds, "times")),
         "sensor_status": np.repeat(
             np.array(_pluck(rsds, "sensor_status"), dtype=np.int64), repeats
         ),
