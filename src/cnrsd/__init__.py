@@ -408,6 +408,7 @@ class RSD:
     class_numbers: NDArray[np.int64] = field(repr=False)
     particle_numbers: NDArray[np.int64] = field(repr=False)
     num_records: int = field(init=False)
+    grid: RSDGrid = field(init=False, repr=False)
 
     __hash__ = None  # pyright: ignore[reportAssignmentType]
 
@@ -416,6 +417,8 @@ class RSD:
         assert len(self.rain_flags) == self.num_records
         assert len(self.class_numbers) == self.num_records
         assert len(self.particle_numbers) == self.num_records
+
+        self.grid = get_rsd_grid(self.device_type)
 
         # 存在 device_type 跟 class_number 不匹配的情况
         if self.num_records > 0:
@@ -574,7 +577,7 @@ class RSDDict(TypedDict):
 
 def rsds_to_dict(rsds: Sequence[RSD]) -> RSDDict:
     # 需要提前处理空列表，否则后面的 repeat 和 concatenate 会报错
-    repeats = [rsd.num_records for rsd in rsds]
+    repeats = _pluck(rsds, "num_records")
     if sum(repeats) == 0:
         return {
             "station_id": np.array([], dtype=np.str_),
