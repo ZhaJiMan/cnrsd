@@ -400,6 +400,7 @@ class RSD:
     latitude: float
     sensor_status: SensorStatus
     device_type: DeviceType
+    reference_time: datetime
     times: NDArray[np.datetime64] = field(repr=False)
     rain_flags: NDArray[np.bool_] = field(repr=False)
     class_numbers: NDArray[np.int64] = field(repr=False)
@@ -460,6 +461,7 @@ class RSD:
             latitude=lat,
             sensor_status=sensor_status,
             device_type=device_type,
+            reference_time=ref_time,
             times=_to_datetime64_us(rsd_body.times),
             rain_flags=np.array(rsd_body.rain_flags, dtype=np.bool_),
             class_numbers=np.array(rsd_body.class_numbers, dtype=np.int64),
