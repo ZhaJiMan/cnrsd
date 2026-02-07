@@ -26,6 +26,7 @@ __all__ = [
     "RSDDict",
     "RSDGrid",
     "SensorStatus",
+    "dataframe_to_rsds",
     "get_rsd_grid",
     "lookup_class_params",
     "rsds_to_dataframe",
@@ -275,7 +276,7 @@ def _decode_lonlat(section4: bitarray) -> tuple[float, float]:
 
 def _decode_sensor_status(section4: bitarray) -> SensorStatus:
     sensor_status = ba2int(section4[377:380])
-    if sensor_status not in range(8):
+    if sensor_status not in {0, 1, 2, 3, 4, 5, 6, 7}:
         raise RSDDecodeError(
             f"0-02-201 的值应该在 0 到 7 范围内，实际是 {sensor_status}"
         )
@@ -413,6 +414,9 @@ class RSD:
     __hash__ = None  # pyright: ignore[reportAssignmentType]
 
     def __post_init__(self) -> None:
+        assert self.sensor_status in {0, 1, 2, 3, 4, 5, 6, 7}
+        assert self.device_type in {0, 1}
+
         self.num_records = len(self.times)
         assert len(self.rain_flags) == self.num_records
         assert len(self.class_numbers) == self.num_records
@@ -633,3 +637,28 @@ def rsds_to_dict(rsds: Sequence[RSD]) -> RSDDict:
 def rsds_to_dataframe(rsds: Sequence[RSD]) -> pd.DataFrame:
     """将多个 RSD 对象转换为 dataframe"""
     return pd.DataFrame(rsds_to_dict(rsds))
+
+
+@cache
+def _get_rsd_grouper() -> pd.Grouper:
+    return pd.Grouper(key="time", freq="5min", closed="right", label="right")  # pyright: ignore[reportCallIssue]
+
+
+def dataframe_to_rsds(df: pd.DataFrame) -> list[RSD]:
+    rsds: list[RSD] = []
+    for _, group in df.groupby(["station_id", _get_rsd_grouper()]):
+        i = group.index[0]
+        rsd = RSD(
+            station_id=str(group.loc[i, "station_id"]),
+            longitude=float(group.loc[i, "longitude"]),
+            latitude=float(group.loc[i, "latitude"]),
+            sensor_status=cast(SensorStatus, int(group.loc[i, "sensor_status"])),
+            device_type=cast(DeviceType, int(group.loc[i, "device_type"])),
+            times=group["time"].to_numpy(),
+            rain_flags=group["rain_flag"].to_numpy(),
+            class_numbers=group["class_number"].to_numpy(),
+            particle_numbers=group["particle_number"].to_numpy(),
+        )
+        rsds.append(rsd)
+
+    return rsds
