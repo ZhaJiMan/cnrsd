@@ -629,3 +629,24 @@ def rsds_to_dict(rsds: Sequence[RSD]) -> RSDDict:
 def rsds_to_dataframe(rsds: Sequence[RSD]) -> pd.DataFrame:
     """将多个 RSD 对象转换为 dataframe"""
     return pd.DataFrame(rsds_to_dict(rsds))
+
+
+def resample_rsd_dataframe(df: pd.DataFrame, freq: str = "5min") -> pd.DataFrame:
+    # 普通列加上时间 grouper 会自动丢弃空时间窗口
+    grouper = pd.Grouper(key="time", freq=freq, closed="right", label="right")  # pyright: ignore[reportCallIssue]
+    window_flags = df.groupby(["station_id", grouper])["rain_flag"].transform("any")
+    # 提前过滤时间窗口里占位的无雨行
+    df = cast(pd.DataFrame, df[~window_flags | df["rain_flag"]])
+
+    agg_map = {col: "first" for col in df.columns if col}
+    for col in ["station_id", "time", "class_number"]:
+        del agg_map[col]
+    agg_map["particle_number"] = "sum"
+
+    agg_df = (
+        df.groupby(["station_id", grouper, "class_number"], as_index=False)
+        .agg(agg_map)[df.columns]
+        .reset_index(drop=True)  # pyright: ignore[reportAttributeAccessIssue]
+    )
+
+    return cast(pd.DataFrame, agg_df)
