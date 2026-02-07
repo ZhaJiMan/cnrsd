@@ -22,12 +22,13 @@ __all__ = [
     "BinAxis",
     "ClassParams",
     "DeviceType",
-    "RSDDecodeError",
     "RSDDict",
+    "RSDError",
     "RSDGrid",
     "SensorStatus",
     "get_rsd_grid",
     "lookup_class_params",
+    "resample_rsd_dataframe",
     "rsds_to_dataframe",
     "rsds_to_dict",
 ]
@@ -226,7 +227,7 @@ def get_rsd_grid(device_type: DeviceType) -> RSDGrid:
     return RSD_GRID_100 if device_type == 0 else RSD_GRID_200
 
 
-class RSDDecodeError(Exception):
+class RSDError(Exception):
     pass
 
 
@@ -241,7 +242,7 @@ def _decode_local_station_id(section4: bitarray) -> str:
     try:
         string = data.decode("ascii")
     except UnicodeDecodeError as e:
-        raise RSDDecodeError("0-01-192 的值应该是 ASCII 编码") from e
+        raise RSDError("0-01-192 的值应该是 ASCII 编码") from e
 
     return string.rstrip("\x00")
 
@@ -276,9 +277,7 @@ def _decode_lonlat(section4: bitarray) -> tuple[float, float]:
 def _decode_sensor_status(section4: bitarray) -> SensorStatus:
     sensor_status = ba2int(section4[377:380])
     if sensor_status not in {0, 1, 2, 3, 4, 5, 6, 7}:
-        raise RSDDecodeError(
-            f"0-02-201 的值应该在 0 到 7 范围内，实际是 {sensor_status}"
-        )
+        raise RSDError(f"0-02-201 的值应该在 0 到 7 范围内，实际是 {sensor_status}")
 
     return cast(SensorStatus, sensor_status)
 
@@ -286,7 +285,7 @@ def _decode_sensor_status(section4: bitarray) -> SensorStatus:
 def _decode_device_type(section4: bitarray) -> DeviceType:
     device_type = ba2int(section4[380:384])
     if device_type not in {0, 1}:
-        raise RSDDecodeError(f"0-02-240 的值应该是 0 或 1，实际是 {device_type}")
+        raise RSDError(f"0-02-240 的值应该是 0 或 1，实际是 {device_type}")
 
     return cast(DeviceType, device_type)
 
@@ -294,7 +293,7 @@ def _decode_device_type(section4: bitarray) -> DeviceType:
 def _decode_time_increment(section4: bitarray) -> float:
     time_increment = _decode_value(ba2int(section4[385:397]), 0, -2048)
     if not math.isclose(time_increment, _TIME_INCREMENT):
-        raise RSDDecodeError(
+        raise RSDError(
             f"time_increment 的值应该是 {_TIME_INCREMENT}，实际是 {time_increment}"
         )
 
@@ -304,7 +303,7 @@ def _decode_time_increment(section4: bitarray) -> float:
 def _decode_short_time_increment(section4: bitarray) -> float:
     short_time_increment = _decode_value(ba2int(section4[397:405]), 0, -128)
     if not math.isclose(short_time_increment, _SHORT_TIME_INCREMENT):
-        raise RSDDecodeError(
+        raise RSDError(
             f"short_time_increment 的值应该是 {_SHORT_TIME_INCREMENT}，"
             f"实际是 {short_time_increment}"
         )
@@ -319,9 +318,7 @@ def _decode_rep_factor_11(section4: bitarray) -> Literal[0, 1]:
 def _decode_rep_factor_7(section4: bitarray) -> Literal[5]:
     rep_factor_7 = ba2int(section4[405:413])
     if rep_factor_7 != _REP_FACTOR_7:
-        raise RSDDecodeError(
-            f"1-07-000 的值应该是 {_REP_FACTOR_7}，实际是 {rep_factor_7}"
-        )
+        raise RSDError(f"1-07-000 的值应该是 {_REP_FACTOR_7}，实际是 {rep_factor_7}")
 
     return cast(Literal[5], rep_factor_7)
 
@@ -421,7 +418,7 @@ class RSD:
             rsd_grid = get_rsd_grid(self.device_type)
             max_class_number = self.class_numbers.max()
             if max_class_number > rsd_grid.num_classes:
-                raise RSDDecodeError(
+                raise RSDError(
                     f"class_number 的最大值 {max_class_number} 超过了"
                     f"device_type={self.device_type} 允许的上限 {rsd_grid.num_classes}"
                 )
@@ -432,9 +429,7 @@ class RSD:
             f.seek(_HEADER_SIZE)
             section0 = f.read(_SECTION0_SIZE)
             if section0[:4] != b"BUFR":
-                raise RSDDecodeError(
-                    f"section0 的开头应该是 b'BUFR'，实际是 {section0[:4]}"
-                )
+                raise RSDError(f"section0 的开头应该是 b'BUFR'，实际是 {section0[:4]}")
 
             bufr_size = int.from_bytes(section0[4:7], byteorder="big")
             section4_size = (
@@ -449,7 +444,7 @@ class RSD:
 
             section5 = f.read(_SECTION5_SIZE)
             if section5 != b"7777":
-                raise RSDDecodeError(f"section5 的值应该是 b'7777'，实际是 {section5}")
+                raise RSDError(f"section5 的值应该是 b'7777'，实际是 {section5}")
 
         section4 = bitarray(section4)
         station_id = _decode_station_id(section4)
@@ -529,7 +524,7 @@ def lookup_class_params(device_type: ArrayLike, class_number: ArrayLike) -> Clas
     # np.atleast_1d 保证结果是一维数组
     device_type = np.asarray(device_type)
     if not ((device_type == 0) | (device_type == 1)).all():
-        raise ValueError("device_type 的值只能取 0 或 1")
+        raise RSDError("device_type 的值只能取 0 或 1")
 
     # np.where 会进行广播
     class_indices = np.asarray(class_number, dtype=np.intp) - 1
@@ -545,7 +540,7 @@ def lookup_class_params(device_type: ArrayLike, class_number: ArrayLike) -> Clas
         # advanced indexing 返回 copy
         class_params = class_table[class_indices, :]
     except IndexError as e:
-        raise IndexError("class_number 的值超过了 device_type 允许的上限") from e
+        raise RSDError("class_number 的值超过了 device_type 允许的上限") from e
 
     # 使用 ellipsis 至少会返回零维数组
     args = (class_params[..., i] for i in range(class_params.shape[-1]))
