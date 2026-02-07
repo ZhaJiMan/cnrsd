@@ -531,12 +531,12 @@ class ClassParams(NamedTuple):
 
 def lookup_class_params(device_type: ArrayLike, class_number: ArrayLike) -> ClassParams:
     # np.atleast_1d 保证结果是一维数组
-    device_type = np.atleast_1d(np.asarray(device_type))
+    device_type = np.asarray(device_type)
     if not ((device_type == 0) | (device_type == 1)).all():
         raise ValueError("device_type 的值只能取 0 或 1")
 
     # np.where 会进行广播
-    class_indices = np.atleast_1d(np.asarray(class_number, dtype=np.intp)) - 1
+    class_indices = np.asarray(class_number, dtype=np.intp) - 1
     class_indices = np.where(
         device_type.astype(np.bool_),
         class_indices + RSD_GRID_100.num_classes,
@@ -550,6 +550,8 @@ def lookup_class_params(device_type: ArrayLike, class_number: ArrayLike) -> Clas
         class_params = class_table[class_indices, :]
     except IndexError as e:
         raise IndexError("class_number 的值超过了 device_type 允许的上限") from e
+
+    # 使用 ellipsis 至少会返回零维数组
     args = (class_params[..., i] for i in range(class_params.shape[-1]))
 
     return ClassParams(*args)
