@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from functools import cache
 from io import BytesIO
 from os import PathLike
-from typing import Any, Literal, NamedTuple, TypeAlias, TypedDict, cast, overload
+from typing import Any, Literal, NamedTuple, TypeAlias, TypedDict, cast
 
 import numpy as np
 import pandas as pd
@@ -483,17 +483,11 @@ class RSD:
         with open(filepath, mode="rb") as f:
             return cls.from_bytes(f.read())
 
-    @overload
-    def to_dict(self, include_class_params: Literal[False]) -> RSDDict: ...
+    def to_dict(self) -> RSDDict:
+        return rsds_to_dict([self])
 
-    @overload
-    def to_dict(self, include_class_params: Literal[True] = True) -> FullRSDDict: ...
-
-    def to_dict(self, include_class_params: bool = True) -> RSDDict | FullRSDDict:
-        return rsds_to_dict([self], include_class_params)
-
-    def to_dataframe(self, include_class_params: bool = True) -> pd.DataFrame:
-        return rsds_to_dataframe([self], include_class_params)
+    def to_dataframe(self) -> pd.DataFrame:
+        return rsds_to_dataframe([self])
 
     def to_dataarray(self) -> xr.DataArray:
         da = build_rsd_dataarray(
@@ -593,30 +587,13 @@ class RSDDict(TypedDict):
     rain_flag: NDArray[np.bool_]
     class_number: NDArray[np.int64]
     particle_number: NDArray[np.int64]
-
-
-class FullRSDDict(RSDDict):
     velocity_center: NDArray[np.float64]
     velocity_width: NDArray[np.float64]
     diameter_center: NDArray[np.float64]
     diameter_width: NDArray[np.float64]
 
 
-@overload
-def rsds_to_dict(
-    rsds: Sequence[RSD], include_class_params: Literal[False]
-) -> RSDDict: ...
-
-
-@overload
-def rsds_to_dict(
-    rsds: Sequence[RSD], include_class_params: Literal[True] = True
-) -> FullRSDDict: ...
-
-
-def rsds_to_dict(
-    rsds: Sequence[RSD], include_class_params: bool = True
-) -> RSDDict | FullRSDDict:
+def rsds_to_dict(rsds: Sequence[RSD]) -> RSDDict:
     # 需要提前处理空列表，否则后面的 repeat 和 concatenate 会报错
     repeats = _pluck(rsds, "num_records")
     if sum(repeats) == 0:
@@ -660,21 +637,19 @@ def rsds_to_dict(
         "particle_number": np.concatenate(_pluck(rsds, "particle_numbers")),
     }
 
-    if include_class_params:
-        class_params = lookup_class_params(data["device_type"], data["class_number"])
-        data["velocity_center"] = class_params.velocity_centers
-        data["velocity_width"] = class_params.velocity_widths
-        data["diameter_center"] = class_params.diameter_centers
-        data["diameter_width"] = class_params.diameter_widths
+    # 耗时不小
+    class_params = lookup_class_params(data["device_type"], data["class_number"])
+    data["velocity_center"] = class_params.velocity_centers
+    data["velocity_width"] = class_params.velocity_widths
+    data["diameter_center"] = class_params.diameter_centers
+    data["diameter_width"] = class_params.diameter_widths
 
-    return cast(RSDDict | FullRSDDict, data)
+    return cast(RSDDict, data)
 
 
-def rsds_to_dataframe(
-    rsds: Sequence[RSD], include_class_params: bool = True
-) -> pd.DataFrame:
+def rsds_to_dataframe(rsds: Sequence[RSD]) -> pd.DataFrame:
     """将多个 RSD 对象转换为 dataframe"""
-    return pd.DataFrame(rsds_to_dict(rsds, include_class_params))
+    return pd.DataFrame(rsds_to_dict(rsds))
 
 
 def resample_rsd_dataframe(df: pd.DataFrame, freq: str = "5min") -> pd.DataFrame:
