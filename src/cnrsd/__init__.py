@@ -597,14 +597,13 @@ class RSDDict(TypedDict):
 
 
 def rsds_to_dict(rsds: Sequence[RSD]) -> RSDDict:
-    # 需要提前处理空列表，否则后面的 repeat 和 concatenate 会报错
-    repeats = _pluck(rsds, "num_records")
-    if sum(repeats) == 0:
+    # 需要提前处理空列表，否则后面的 concatenate 会报错
+    if not rsds:
         return {
             "station_id": np.array([], dtype=np.str_),
             "longitude": np.array([], dtype=np.float64),
             "latitude": np.array([], dtype=np.float64),
-            "time": np.array([], dtype=np.datetime64),
+            "time": np.array([], dtype="datetime64[us]"),
             "sensor_status": np.array([], dtype=np.int64),
             "device_type": np.array([], dtype=np.int64),
             "rain_flag": np.array([], dtype=np.bool_),
@@ -617,7 +616,7 @@ def rsds_to_dict(rsds: Sequence[RSD]) -> RSDDict:
         }
 
     # 貌似 pluck 比 attrgetter + zip 要快一点
-    repeats = np.array(repeats, dtype=np.int64)
+    repeats = np.array(_pluck(rsds, "num_records"), dtype=np.int64)
     data = {
         "station_id": np.repeat(
             np.array(_pluck(rsds, "station_id"), dtype=np.str_), repeats
@@ -628,16 +627,18 @@ def rsds_to_dict(rsds: Sequence[RSD]) -> RSDDict:
         "latitude": np.repeat(
             np.array(_pluck(rsds, "latitude"), dtype=np.float64), repeats
         ),
-        "time": np.concatenate(_pluck(rsds, "times")),
+        "time": np.concatenate(_pluck(rsds, "times"), dtype="datetime64[us]"),
         "sensor_status": np.repeat(
             np.array(_pluck(rsds, "sensor_status"), dtype=np.int64), repeats
         ),
         "device_type": np.repeat(
             np.array(_pluck(rsds, "device_type"), dtype=np.int64), repeats
         ),
-        "rain_flag": np.concatenate(_pluck(rsds, "rain_flags")),
-        "class_number": np.concatenate(_pluck(rsds, "class_numbers")),
-        "particle_number": np.concatenate(_pluck(rsds, "particle_numbers")),
+        "rain_flag": np.concatenate(_pluck(rsds, "rain_flags"), dtype=np.bool_),
+        "class_number": np.concatenate(_pluck(rsds, "class_numbers"), dtype=np.int64),
+        "particle_number": np.concatenate(
+            _pluck(rsds, "particle_numbers"), dtype=np.int64
+        ),
     }
 
     # 耗时不小
