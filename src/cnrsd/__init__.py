@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import math
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -55,6 +54,29 @@ _TRAILER_SIZE = 4
 
 @dataclass
 class BinAxis:
+    """表示一维分箱的轴
+
+    Attributes
+    ----------
+    edges : (n + 1,) ndarray
+        分箱边缘
+
+    num_bins : int
+        分箱数量，等于 len(edges) - 1
+
+    lower_bounds : (n,) ndarray
+        每个分箱的左边缘
+
+    upper_bounds : (n,) ndarray
+        每个分箱的右边缘
+
+    centers : (n,) ndarray
+        每个分箱的中心
+
+    widths : (n,) ndarray
+        每个分箱的宽度
+    """
+
     edges: NDArray[np.float64] = field(repr=False)
     num_bins: int = field(init=False)
     lower_bounds: NDArray[np.float64] = field(init=False, repr=False)
@@ -65,7 +87,11 @@ class BinAxis:
     __hash__ = None  # pyright: ignore[reportAssignmentType]
 
     def __post_init__(self) -> None:
-        assert self.edges.ndim == 1 and len(self.edges) >= 2
+        if self.edges.ndim != 1 or len(self.edges) < 2:
+            raise ValueError("edges 必须是长度至少为 2 的一维数组")
+        if not np.all(self.edges[:-1] <= self.edges[1:]):
+            raise ValueError("edges 必须单调递增")
+
         self.num_bins = len(self.edges) - 1
         self.lower_bounds = self.edges[:-1]
         self.upper_bounds = self.edges[1:]
@@ -74,11 +100,29 @@ class BinAxis:
 
     @classmethod
     def from_edges(cls, edges: Sequence[float] | NDArray[np.floating]):
+        """用分箱边缘构造 BinAxis 对象"""
         return cls(np.asarray(edges, dtype=np.float64))
 
 
 @dataclass
 class RSDGrid:
+    """雨滴谱的二维分箱网格
+
+    Attributes
+    ----------
+    velocity : BinAxis
+        速度分箱轴
+
+    diameter : BinAxis
+        直径分箱轴
+
+    shape : tuple[int, int]
+        网格形状，等于 (velocity.num_bins, diameter.num_bins)。
+
+    num_classes : int
+        网格含有的分级数量
+    """
+
     velocity: BinAxis
     diameter: BinAxis
     shape: tuple[int, int] = field(init=False, repr=False)
@@ -91,6 +135,7 @@ class RSDGrid:
         self.num_classes = self.shape[0] * self.shape[1]
 
 
+# 100 型雨滴谱仪
 RSD_GRID_100 = RSDGrid(
     velocity=BinAxis.from_edges(
         [
@@ -168,6 +213,7 @@ RSD_GRID_100 = RSDGrid(
     ),
 )
 
+# 200 型雨滴谱仪
 RSD_GRID_200 = RSDGrid(
     velocity=BinAxis.from_edges(
         [
@@ -229,6 +275,7 @@ DeviceType: TypeAlias = Literal[0, 1]
 
 
 def get_rsd_grid(device_type: DeviceType) -> RSDGrid:
+    """根据设备类型获取雨滴谱的分箱网格"""
     match device_type:
         case 0:
             return RSD_GRID_100
@@ -249,13 +296,7 @@ def _decode_wmo_station_id(section4: bitarray) -> str:
 
 
 def _decode_local_station_id(section4: bitarray) -> str:
-    data = section4[49:209].tobytes()
-    try:
-        string = data.decode("ascii")
-    except UnicodeDecodeError as e:
-        raise RSDError("本地测站标识的值应该是 ASCII 编码") from e
-
-    return string.rstrip("\x00")
+    return section4[49:209].tobytes().decode("ascii").rstrip("\x00")
 
 
 def _decode_station_id(section4: bitarray) -> str:
@@ -286,39 +327,19 @@ def _decode_lonlat(section4: bitarray) -> tuple[float, float]:
 
 
 def _decode_sensor_status(section4: bitarray) -> SensorStatus:
-    sensor_status = ba2int(section4[377:380])
-    if sensor_status not in {0, 1, 2, 3, 4, 5, 6, 7}:
-        raise RSDError(
-            f"雨滴谱传感器标识的值应该在 0 到 7 范围内，实际是 {sensor_status}"
-        )
-
-    return cast(SensorStatus, sensor_status)
+    return cast(SensorStatus, ba2int(section4[377:380]))
 
 
 def _decode_device_type(section4: bitarray) -> DeviceType:
-    device_type = ba2int(section4[380:384])
-    if device_type not in {0, 1}:
-        raise RSDError(f"雨滴谱设备类型的值应该是 0 或 1，实际是 {device_type}")
-
-    return cast(DeviceType, device_type)
+    return cast(DeviceType, ba2int(section4[380:384]))
 
 
 def _decode_time_increment(section4: bitarray) -> float:
-    time_increment = _decode_value(ba2int(section4[385:397]), 0, -2048)
-    if not math.isclose(time_increment, _TIME_INCREMENT):
-        raise RSDError(f"时间增量的值应该是 {_TIME_INCREMENT}，实际是 {time_increment}")
-
-    return time_increment
+    return _decode_value(ba2int(section4[385:397]), 0, -2048)
 
 
 def _decode_short_time_increment(section4: bitarray) -> float:
-    short_time_increment = _decode_value(ba2int(section4[397:405]), 0, -128)
-    if not math.isclose(short_time_increment, _SHORT_TIME_INCREMENT):
-        raise RSDError(
-            f"短时间增量的值应该是 {_SHORT_TIME_INCREMENT}，实际是 {short_time_increment}"
-        )
-
-    return short_time_increment
+    return _decode_value(ba2int(section4[397:405]), 0, -128)
 
 
 def _decode_rep_factor_11(section4: bitarray) -> Literal[0, 1]:
@@ -326,13 +347,7 @@ def _decode_rep_factor_11(section4: bitarray) -> Literal[0, 1]:
 
 
 def _decode_rep_factor_7(section4: bitarray) -> Literal[5]:
-    rep_factor_7 = ba2int(section4[405:413])
-    if rep_factor_7 != _REP_FACTOR_7:
-        raise RSDError(
-            f"延迟描述符重复因子的值应该是 {_REP_FACTOR_7}，实际是 {rep_factor_7}"
-        )
-
-    return cast(Literal[5], rep_factor_7)
+    return cast(Literal[5], ba2int(section4[405:413]))
 
 
 @dataclass
@@ -342,37 +357,38 @@ class _RSDBody:
     class_numbers: list[int] = field(default_factory=list)
     particle_numbers: list[int] = field(default_factory=list)
 
-    def append(
-        self, time: float, rain_flag: bool, class_number: int, particle_number: int
+    def append_record(
+        self, time: float, class_number: int, particle_number: int
     ) -> None:
         self.times.append(time)
-        self.rain_flags.append(rain_flag)
+        self.rain_flags.append(True)
         self.class_numbers.append(class_number)
         self.particle_numbers.append(particle_number)
 
+    def append_placeholder(self, time: float) -> None:
+        self.times.append(time)
+        self.rain_flags.append(False)
+        self.class_numbers.append(1)
+        self.particle_numbers.append(0)
+
 
 def _decode_rsd_body(section4: bitarray, ref_time: datetime) -> _RSDBody:
-    """
-    particle_number 的位数全 1 时即缺测，跳过缺测的记录。
-    rep_factor=0 时视为无雨，bufr 里为了节省空间没有存计数。但为了方便后续处理，
-    插入一条 rain_flag=False, class_number=1, particle_number=0 的记录表示无雨
-    """
-    # time 的单位是秒
+    # 时间单位是秒
     time = ref_time.timestamp() + _TIME_INCREMENT * 60
 
-    # 插入空值
+    # rep_factor_11 为 0 表示 5 个时刻均无雨，插入 5 行占位行
     rsd_body = _RSDBody()
     rep_factor_11 = _decode_rep_factor_11(section4)
     if rep_factor_11 == 0:
         for _ in range(_REP_FACTOR_7):
             time += _SHORT_TIME_INCREMENT * 60
-            rsd_body.append(time, False, 1, 0)
+            rsd_body.append_placeholder(time)
         return rsd_body
 
-    # 通过解码检查常量的值是否符合预期，以防 BUFR 格式发生变化
-    time_increment = _decode_time_increment(section4)  # noqa: F841
-    short_time_increment = _decode_short_time_increment(section4)  # noqa: F841
-    rep_factor_7 = _decode_rep_factor_7(section4)  # noqa: F841
+    # 常量不从 section4 中解析，因为 rep_factor_11 为零时无法读取常量插入占位行
+    # time_increment = _decode_time_increment(section4)
+    # short_time_increment = _decode_short_time_increment(section4)
+    # rep_factor_7 = _decode_rep_factor_7(section4)
 
     pos = 413
     for _ in range(_REP_FACTOR_7):
@@ -380,18 +396,20 @@ def _decode_rsd_body(section4: bitarray, ref_time: datetime) -> _RSDBody:
         rep_factor_5 = ba2int(section4[pos : pos + 16])
         pos += 16
 
-        # 插入空值
+        # rep_factor_5 为零表示对应时刻无雨，插入占位行
         if rep_factor_5 == 0:
-            rsd_body.append(time, False, 1, 0)
+            rsd_body.append_placeholder(time)
             continue
 
         for _ in range(rep_factor_5):
-            # 因为质控码始终是 0，所以跳过读取
             i0, i1, i2, i3, i4 = pos, pos + 12, pos + 18, pos + 26, pos + 42  # noqa: F841
             class_number = ba2int(section4[i0:i1])
+            # qc_significance = ba2int(section4[i1:i2])
+            # qc_code = ba2int(section4[i2:i3])
             particle_number = ba2int(section4[i3:i4])
-            if particle_number != _MISSING_VALUE:  # 跳过缺测
-                rsd_body.append(time, True, class_number, particle_number)
+            # 跳过 bit 全为 1 的 particle_number
+            if particle_number != _MISSING_VALUE:
+                rsd_body.append_record(time, class_number, particle_number)
             pos = i4
 
     return rsd_body
@@ -407,6 +425,54 @@ def _to_datetime64_us(times: Sequence[float]) -> NDArray[np.datetime64]:
 
 @dataclass
 class RSD:
+    """雨滴谱数据
+
+    BUFR 文件从参考时间开始往前，每分钟观测一个雨滴谱，共观测 5 个雨滴谱。`RSD` 类将每个时刻、
+    雨滴谱每个分级的粒子数以长表的形式保存。
+
+    为了节省内存，只保存粒子数非零的行，并设置 `rain_flag=True`；如果某个时刻的所有分级的粒子数都是零，
+    为了避免直接损失这个时刻，插入占位行（`rain_flag=False`, `class_number=1`, `particle_number=0`）。
+
+    Attributes
+    ----------
+    station_id : str
+        测站标识
+
+    longitude : float
+        经度
+
+    latitude : float
+        纬度
+
+    sensor_status : {0, 1, 2, 3, 4, 5, 6, 7}
+        传感器标识
+
+    device_type : {0, 1}
+        设备类型
+
+    reference_time : datetime
+        参考时间
+
+    times : (n,) ndarray
+        每行对应的时刻
+
+    rain_flags : (n,) ndarray
+        `True` 表示该行所属的时刻有雨（存在至少一个分级的粒子数非零），
+        `False` 表示该行所属的时刻无雨（所有分级的粒子数都是零）。
+
+    class_numbers : (n,) ndarray
+        每行对应的分级编号
+
+    particle_numbers : (n,) ndarray
+        每行对应的粒子数
+
+    num_records : int
+        长表行（记录）数
+
+    grid : RSDGrid
+        `device_type` 对应的雨滴谱分箱网格
+    """
+
     station_id: str
     longitude: float
     latitude: float
@@ -423,21 +489,28 @@ class RSD:
     __hash__ = None  # pyright: ignore[reportAssignmentType]
 
     def __post_init__(self) -> None:
+        if self.sensor_status not in {0, 1, 2, 3, 4, 5, 6, 7}:
+            raise RSDError(
+                f"sensor_status 的值应该是 0 到 7，实际是 {self.sensor_status}"
+            )
+        if self.device_type not in {0, 1}:
+            raise RSDError(f"device_type 的值应该是 0 或 1，实际是 {self.device_type}")
+
         self.num_records = len(self.times)
         self.grid = get_rsd_grid(self.device_type)
 
         # 存在 device_type 跟 class_number 不匹配的情况
         if self.num_records > 0:
-            rsd_grid = get_rsd_grid(self.device_type)
             max_class_number = self.class_numbers.max()
-            if max_class_number > rsd_grid.num_classes:
+            if max_class_number > self.grid.num_classes:
                 raise RSDError(
                     f"class_numbers 的最大值 {max_class_number} 超过了"
-                    f"device_type={self.device_type} 允许的上限 {rsd_grid.num_classes}"
+                    f"device_type={self.device_type} 允许的上限 {self.grid.num_classes}"
                 )
 
     @classmethod
     def from_bytes(cls, data: bytes):
+        """从 bytes 构造 `RSD` 对象"""
         with BytesIO(data) as f:
             f.seek(_HEADER_SIZE)
             section0 = f.read(_SECTION0_SIZE)
@@ -482,17 +555,34 @@ class RSD:
 
     @classmethod
     def from_file(cls, filepath: str | PathLike[str]):
+        """从文件构造 `RSD` 对象"""
         # 小文件直接读入内存
         with open(filepath, mode="rb") as f:
             return cls.from_bytes(f.read())
 
     def to_dict(self) -> RSDDict:
+        """将 `RSD` 对象转换成列式字典
+
+        标量属性会广播到与行数相同的长度，行数为零时得到每列都是空数组的字典。
+
+        会根据 `class_numbers` 属性，追加速度和直径分箱的中心和宽度的列，方便后续过滤和统计。
+
+        结果可以传给 pandas 或 polars 以构造 `DataFrame` 对象。
+        """
         return rsds_to_dict([self])
 
     def to_dataframe(self) -> pd.DataFrame:
+        """将 `RSD` 对象转换成 pandas 的 `DataFrame` 对象"""
         return rsds_to_dataframe([self])
 
     def to_dataarray(self) -> xr.DataArray:
+        """将 `RSD` 对象转换成 xarray 的 `DataArray` 对象
+
+        维度是 `(time, velocity_center, diameter_center)`，值是粒子数，
+        `velocity_width` 和 `diameter_width` 是辅助坐标，标量属性保存到 `attrs` 中。
+
+        如果需要导出 netCDF4 文件，需要用户自行处理 `attrs`。
+        """
         da = build_rsd_dataarray(
             device_type=self.device_type,
             times=self.times,
@@ -554,6 +644,7 @@ class ClassParams(NamedTuple):
 def lookup_class_params(
     device_types: ArrayLike, class_numbers: ArrayLike
 ) -> ClassParams:
+    """根据设备类型和分级编号查找对应的速度和直径的分箱参数（中心、宽度和上下界）"""
     device_types = np.atleast_1d(np.asarray(device_types))
     class_numbers = np.atleast_1d(np.asarray(class_numbers, dtype=np.intp))
     if device_types.shape != class_numbers.shape:
@@ -597,6 +688,10 @@ class RSDDict(TypedDict):
 
 
 def rsds_to_dict(rsds: Sequence[RSD]) -> RSDDict:
+    """将多个 `RSD` 对象转换成列式字典
+
+    `RSD.to_dict` 方法的批量版本，比循环调用更快。
+    """
     # 需要提前处理空列表，否则后面的 concatenate 会报错
     if not rsds:
         return {
@@ -641,7 +736,6 @@ def rsds_to_dict(rsds: Sequence[RSD]) -> RSDDict:
         ),
     }
 
-    # 耗时不小
     class_params = lookup_class_params(data["device_type"], data["class_number"])
     data["velocity_center"] = class_params.velocity_centers
     data["velocity_width"] = class_params.velocity_widths
@@ -652,13 +746,23 @@ def rsds_to_dict(rsds: Sequence[RSD]) -> RSDDict:
 
 
 def rsds_to_dataframe(rsds: Sequence[RSD]) -> pd.DataFrame:
-    """将多个 RSD 对象转换为 dataframe"""
+    """将多个 `RSD` 对象转换成 pandas 的 `DataFrame` 对象
+
+    `RSD.to_dataframe` 方法的批量版本，比循环调用更快。
+    """
     import pandas as pd
 
     return pd.DataFrame(rsds_to_dict(rsds))
 
 
 def resample_rsd_dataframe(df: pd.DataFrame, freq: str = "5min") -> pd.DataFrame:
+    """对 `RSD` 转换得到的 pandas `DataFrame` 进行时间重采样
+
+    要求 `df` 含有 `station_id`、`time`、`class_number`、`rain_flag` 和 `particle_number` 列。
+
+    会按 `station_id` 和 `time` 进行分组，计算 `freq` 时间窗口内 `particle_number` 的和。
+    并且能正确处理 `rain_flag=False` 的占位行。
+    """
     import pandas as pd
 
     # 普通列加上时间 grouper 会自动丢弃空时间窗口
@@ -687,6 +791,11 @@ def build_rsd_dataarray(
     class_numbers: ArrayLike,
     particle_numbers: ArrayLike,
 ) -> xr.DataArray:
+    """用雨滴谱数据构造 xarray 的 `DataArray` 对象
+
+    维度是 `(time, velocity_center, diameter_center)`，值是粒子数，
+    `velocity_width` 和 `diameter_width` 是辅助坐标，相比 `RSD.to_dataarray` 方法不含元数据。
+    """
     import xarray as xr
 
     if device_type not in {0, 1}:
@@ -723,6 +832,7 @@ def build_rsd_dataarray(
 
 
 def get_bin_edges(centers: ArrayLike, widths: ArrayLike) -> NDArray[np.float64]:
+    """根据分箱中心和宽度计算分箱边缘"""
     centers = np.atleast_1d(np.asarray(centers, dtype=np.float64))
     widths = np.atleast_1d(np.asarray(widths, dtype=np.float64))
     if centers.ndim != 1 or centers.size == 0:
