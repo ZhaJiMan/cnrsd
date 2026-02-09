@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from functools import cache
 from io import BytesIO
 from os import PathLike
-from typing import Any, Literal, NamedTuple, TypeAlias, TypedDict, cast
+from typing import Any, Literal, NamedTuple, TypeAlias, TypedDict, cast, overload
 
 import numpy as np
 import pandas as pd
@@ -76,8 +76,8 @@ class BinAxis:
 class RSDGrid:
     velocity: BinAxis
     diameter: BinAxis
-    shape: tuple[int, int] = field(init=False, repr=False, compare=False)
-    num_classes: int = field(init=False, repr=False, compare=False)
+    shape: tuple[int, int] = field(init=False, repr=False)
+    num_classes: int = field(init=False, repr=False)
 
     __hash__ = None  # pyright: ignore[reportAssignmentType]
 
@@ -474,8 +474,14 @@ class RSD:
         with open(filepath, mode="rb") as f:
             return cls.from_bytes(f.read())
 
-    def to_dict(self) -> RSDDict:
-        return rsds_to_dict([self])
+    @overload
+    def to_dict(self, include_class_params: Literal[False]) -> RSDDict: ...
+
+    @overload
+    def to_dict(self, include_class_params: Literal[True] = True) -> FullRSDDict: ...
+
+    def to_dict(self, include_class_params: bool = True) -> RSDDict | FullRSDDict:
+        return rsds_to_dict([self], include_class_params)
 
     def to_dataframe(self) -> pd.DataFrame:
         return rsds_to_dataframe([self])
@@ -564,13 +570,30 @@ class RSDDict(TypedDict):
     rain_flag: NDArray[np.bool_]
     class_number: NDArray[np.int64]
     particle_number: NDArray[np.int64]
+
+
+class FullRSDDict(RSDDict):
     velocity_center: NDArray[np.float64]
     velocity_width: NDArray[np.float64]
     diameter_center: NDArray[np.float64]
     diameter_width: NDArray[np.float64]
 
 
-def rsds_to_dict(rsds: Sequence[RSD]) -> RSDDict:
+@overload
+def rsds_to_dict(
+    rsds: Sequence[RSD], include_class_params: Literal[False]
+) -> RSDDict: ...
+
+
+@overload
+def rsds_to_dict(
+    rsds: Sequence[RSD], include_class_params: Literal[True] = True
+) -> FullRSDDict: ...
+
+
+def rsds_to_dict(
+    rsds: Sequence[RSD], include_class_params: bool = True
+) -> RSDDict | FullRSDDict:
     # 需要提前处理空列表，否则后面的 repeat 和 concatenate 会报错
     repeats = _pluck(rsds, "num_records")
     if sum(repeats) == 0:
@@ -614,13 +637,14 @@ def rsds_to_dict(rsds: Sequence[RSD]) -> RSDDict:
         "particle_number": np.concatenate(_pluck(rsds, "particle_numbers")),
     }
 
-    class_params = lookup_class_params(data["device_type"], data["class_number"])
-    data["velocity_center"] = class_params.velocity_centers
-    data["velocity_width"] = class_params.velocity_widths
-    data["diameter_center"] = class_params.diameter_centers
-    data["diameter_width"] = class_params.diameter_widths
+    if include_class_params:
+        class_params = lookup_class_params(data["device_type"], data["class_number"])
+        data["velocity_center"] = class_params.velocity_centers
+        data["velocity_width"] = class_params.velocity_widths
+        data["diameter_center"] = class_params.diameter_centers
+        data["diameter_width"] = class_params.diameter_widths
 
-    return cast(RSDDict, data)
+    return cast(RSDDict | FullRSDDict, data)
 
 
 def rsds_to_dataframe(rsds: Sequence[RSD]) -> pd.DataFrame:
