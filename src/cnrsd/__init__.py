@@ -407,7 +407,7 @@ def _decode_rsd_body(section4: bitarray, ref_time: datetime) -> _RSDBody:
             # qc_significance = ba2int(section4[i1:i2])
             # qc_code = ba2int(section4[i2:i3])
             particle_number = ba2int(section4[i3:i4])
-            # 跳过 bit 全为 1 的 particle_number
+            # TODO: 可能存在部分分级的粒子数缺测的情况吗？
             if particle_number != _MISSING_VALUE:
                 rsd_body.append_record(time, class_number, particle_number)
             pos = i4
