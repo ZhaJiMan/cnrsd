@@ -224,7 +224,13 @@ DeviceType: TypeAlias = Literal[0, 1]
 
 
 def get_rsd_grid(device_type: DeviceType) -> RSDGrid:
-    return RSD_GRID_100 if device_type == 0 else RSD_GRID_200
+    match device_type:
+        case 0:
+            return RSD_GRID_100
+        case 1:
+            return RSD_GRID_200
+        case _:
+            raise RSDError(f"device_type 的值应该是 0 或 1，实际是 {device_type}")
 
 
 class RSDError(Exception):
@@ -242,7 +248,7 @@ def _decode_local_station_id(section4: bitarray) -> str:
     try:
         string = data.decode("ascii")
     except UnicodeDecodeError as e:
-        raise RSDError("0-01-192 的值应该是 ASCII 编码") from e
+        raise RSDError("本地测站标识的值应该是 ASCII 编码") from e
 
     return string.rstrip("\x00")
 
@@ -277,7 +283,9 @@ def _decode_lonlat(section4: bitarray) -> tuple[float, float]:
 def _decode_sensor_status(section4: bitarray) -> SensorStatus:
     sensor_status = ba2int(section4[377:380])
     if sensor_status not in {0, 1, 2, 3, 4, 5, 6, 7}:
-        raise RSDError(f"0-02-201 的值应该在 0 到 7 范围内，实际是 {sensor_status}")
+        raise RSDError(
+            f"雨滴谱传感器标识的值应该在 0 到 7 范围内，实际是 {sensor_status}"
+        )
 
     return cast(SensorStatus, sensor_status)
 
@@ -285,7 +293,7 @@ def _decode_sensor_status(section4: bitarray) -> SensorStatus:
 def _decode_device_type(section4: bitarray) -> DeviceType:
     device_type = ba2int(section4[380:384])
     if device_type not in {0, 1}:
-        raise RSDError(f"0-02-240 的值应该是 0 或 1，实际是 {device_type}")
+        raise RSDError(f"雨滴谱设备类型的值应该是 0 或 1，实际是 {device_type}")
 
     return cast(DeviceType, device_type)
 
@@ -293,9 +301,7 @@ def _decode_device_type(section4: bitarray) -> DeviceType:
 def _decode_time_increment(section4: bitarray) -> float:
     time_increment = _decode_value(ba2int(section4[385:397]), 0, -2048)
     if not math.isclose(time_increment, _TIME_INCREMENT):
-        raise RSDError(
-            f"time_increment 的值应该是 {_TIME_INCREMENT}，实际是 {time_increment}"
-        )
+        raise RSDError(f"时间增量的值应该是 {_TIME_INCREMENT}，实际是 {time_increment}")
 
     return time_increment
 
@@ -304,8 +310,7 @@ def _decode_short_time_increment(section4: bitarray) -> float:
     short_time_increment = _decode_value(ba2int(section4[397:405]), 0, -128)
     if not math.isclose(short_time_increment, _SHORT_TIME_INCREMENT):
         raise RSDError(
-            f"short_time_increment 的值应该是 {_SHORT_TIME_INCREMENT}，"
-            f"实际是 {short_time_increment}"
+            f"短时间增量的值应该是 {_SHORT_TIME_INCREMENT}，实际是 {short_time_increment}"
         )
 
     return short_time_increment
@@ -318,7 +323,9 @@ def _decode_rep_factor_11(section4: bitarray) -> Literal[0, 1]:
 def _decode_rep_factor_7(section4: bitarray) -> Literal[5]:
     rep_factor_7 = ba2int(section4[405:413])
     if rep_factor_7 != _REP_FACTOR_7:
-        raise RSDError(f"1-07-000 的值应该是 {_REP_FACTOR_7}，实际是 {rep_factor_7}")
+        raise RSDError(
+            f"延迟描述符重复因子的值应该是 {_REP_FACTOR_7}，实际是 {rep_factor_7}"
+        )
 
     return cast(Literal[5], rep_factor_7)
 
@@ -528,16 +535,18 @@ class ClassParams(NamedTuple):
     __hash__ = None  # pyright: ignore[reportAssignmentType]
 
 
-def lookup_class_params(device_type: ArrayLike, class_number: ArrayLike) -> ClassParams:
-    # np.atleast_1d 保证结果是一维数组
-    device_type = np.asarray(device_type)
-    if not ((device_type == 0) | (device_type == 1)).all():
-        raise RSDError("device_type 的值只能取 0 或 1")
+def lookup_class_params(
+    device_types: ArrayLike, class_numbers: ArrayLike
+) -> ClassParams:
+    # 允许输入是标量
+    device_types = np.asarray(device_types)
+    if not ((device_types == 0) | (device_types == 1)).all():
+        raise RSDError("device_types 的元素的值只能是 0 或 1")
 
     # np.where 会进行广播
-    class_indices = np.asarray(class_number, dtype=np.intp) - 1
+    class_indices = np.asarray(class_numbers, dtype=np.intp) - 1
     class_indices = np.where(
-        device_type.astype(np.bool_),
+        device_types.astype(np.bool_),
         class_indices + RSD_GRID_100.num_classes,
         class_indices,
     )
@@ -548,7 +557,7 @@ def lookup_class_params(device_type: ArrayLike, class_number: ArrayLike) -> Clas
         # advanced indexing 返回 copy
         class_params = class_table[class_indices, :]
     except IndexError as e:
-        raise RSDError("class_number 的值超过了 device_type 允许的上限") from e
+        raise RSDError("class_numbers 有元素的值超过了 device_types 允许的上限") from e
 
     # 使用 ellipsis 至少会返回零维数组
     args = (class_params[..., i] for i in range(class_params.shape[-1]))
