@@ -28,6 +28,7 @@ __all__ = [
     "RSDGrid",
     "SensorStatus",
     "build_rsd_dataarray",
+    "get_bin_edges",
     "get_rsd_grid",
     "lookup_class_params",
     "resample_rsd_dataframe",
@@ -429,7 +430,7 @@ class RSD:
             max_class_number = self.class_numbers.max()
             if max_class_number > rsd_grid.num_classes:
                 raise RSDError(
-                    f"class_number 的最大值 {max_class_number} 超过了"
+                    f"class_numbers 的最大值 {max_class_number} 超过了"
                     f"device_type={self.device_type} 允许的上限 {rsd_grid.num_classes}"
                 )
 
@@ -502,7 +503,7 @@ class RSD:
         da.attrs["latitude"] = self.latitude
         da.attrs["sensor_status"] = self.sensor_status
         da.attrs["device_type"] = self.device_type
-        da.attrs["reference_time"] = self.reference_time.isoformat()  # netCDF
+        da.attrs["reference_time"] = self.reference_time  # not netCDF type
 
         return da
 
@@ -692,7 +693,10 @@ def build_rsd_dataarray(
     unique_times, time_indices = np.unique(times.ravel(), return_inverse=True)
     class_indices = class_numbers.ravel() - 1
     data = np.zeros((len(unique_times), rsd_grid.num_classes), dtype=np.int64)
-    data[time_indices, class_indices] = particle_numbers.ravel()
+    try:
+        data[time_indices, class_indices] = particle_numbers.ravel()
+    except IndexError as e:
+        raise ValueError("class_numbers 有元素的值超过了 device_type 允许的上限") from e
 
     da = xr.DataArray(
         data.reshape(-1, *rsd_grid.shape),
@@ -707,3 +711,19 @@ def build_rsd_dataarray(
     )
 
     return da
+
+
+def get_bin_edges(centers: ArrayLike, widths: ArrayLike) -> NDArray[np.float64]:
+    centers = np.atleast_1d(np.asarray(centers, dtype=np.float64))
+    widths = np.atleast_1d(np.asarray(widths, dtype=np.float64))
+    if centers.ndim != 1 or centers.size == 0:
+        raise ValueError("centers 必须是 1 维非空数组")
+    if len(centers) != len(widths):
+        raise ValueError("centers 和 widths 的形状必须相同")
+
+    half_widths = widths / 2
+    edges = np.empty(len(centers) + 1, dtype=np.float64)
+    edges[:-1] = centers - half_widths
+    edges[-1] = centers[-1] + half_widths[-1]
+
+    return edges
