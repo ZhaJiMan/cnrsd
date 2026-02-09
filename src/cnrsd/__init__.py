@@ -11,6 +11,7 @@ from typing import Any, Literal, NamedTuple, TypeAlias, TypedDict, cast, overloa
 
 import numpy as np
 import pandas as pd
+import xarray as xr
 from bitarray import bitarray
 from bitarray.util import ba2int
 from numpy.typing import ArrayLike, NDArray
@@ -26,6 +27,7 @@ __all__ = [
     "RSDError",
     "RSDGrid",
     "SensorStatus",
+    "build_rsd_dataarray",
     "get_rsd_grid",
     "lookup_class_params",
     "resample_rsd_dataframe",
@@ -59,10 +61,6 @@ class BinAxis:
 
     __hash__ = None  # pyright: ignore[reportAssignmentType]
 
-    @classmethod
-    def from_edges(cls, edges: Sequence[float] | NDArray[np.floating]):
-        return cls(np.asarray(edges, dtype=np.float64))
-
     def __post_init__(self) -> None:
         assert self.edges.ndim == 1 and len(self.edges) >= 2
         self.num_bins = len(self.edges) - 1
@@ -70,6 +68,10 @@ class BinAxis:
         self.upper_bounds = self.edges[1:]
         self.centers = (self.edges[:-1] + self.edges[1:]) / 2
         self.widths = self.edges[1:] - self.edges[:-1]
+
+    @classmethod
+    def from_edges(cls, edges: Sequence[float] | NDArray[np.floating]):
+        return cls(np.asarray(edges, dtype=np.float64))
 
 
 @dataclass
@@ -490,8 +492,25 @@ class RSD:
     def to_dict(self, include_class_params: bool = True) -> RSDDict | FullRSDDict:
         return rsds_to_dict([self], include_class_params)
 
-    def to_dataframe(self) -> pd.DataFrame:
-        return rsds_to_dataframe([self])
+    def to_dataframe(self, include_class_params: bool = True) -> pd.DataFrame:
+        return rsds_to_dataframe([self], include_class_params)
+
+    def to_dataarray(self) -> xr.DataArray:
+        da = build_rsd_dataarray(
+            device_type=self.device_type,
+            times=self.times,
+            class_numbers=self.class_numbers,
+            particle_numbers=self.particle_numbers,
+        )
+
+        da.attrs["station_id"] = self.station_id
+        da.attrs["longitude"] = self.longitude
+        da.attrs["latitude"] = self.latitude
+        da.attrs["sensor_status"] = self.sensor_status
+        da.attrs["device_type"] = self.device_type
+        da.attrs["reference_time"] = self.reference_time.isoformat()  # netCDF
+
+        return da
 
 
 def _vstack_bin_params(bin_axis: BinAxis) -> NDArray[np.float64]:
@@ -651,9 +670,11 @@ def rsds_to_dict(
     return cast(RSDDict | FullRSDDict, data)
 
 
-def rsds_to_dataframe(rsds: Sequence[RSD]) -> pd.DataFrame:
+def rsds_to_dataframe(
+    rsds: Sequence[RSD], include_class_params: bool = True
+) -> pd.DataFrame:
     """将多个 RSD 对象转换为 dataframe"""
-    return pd.DataFrame(rsds_to_dict(rsds))
+    return pd.DataFrame(rsds_to_dict(rsds, include_class_params))
 
 
 def resample_rsd_dataframe(df: pd.DataFrame, freq: str = "5min") -> pd.DataFrame:
@@ -675,3 +696,39 @@ def resample_rsd_dataframe(df: pd.DataFrame, freq: str = "5min") -> pd.DataFrame
     )
 
     return cast(pd.DataFrame, agg_df)
+
+
+def build_rsd_dataarray(
+    device_type: DeviceType,
+    times: ArrayLike,
+    class_numbers: ArrayLike,
+    particle_numbers: ArrayLike,
+) -> xr.DataArray:
+    if device_type not in {0, 1}:
+        raise ValueError(f"device_type 的值应该是 0 或 1，实际是 {device_type}")
+
+    times = np.atleast_1d(np.asarray(times, dtype="datetime64[us]"))
+    class_numbers = np.atleast_1d(np.asarray(class_numbers, dtype=np.intp))
+    particle_numbers = np.atleast_1d(np.asarray(particle_numbers, dtype=np.int64))
+    if not (times.shape == class_numbers.shape == particle_numbers.shape):
+        raise ValueError("times, class_numbers 和 particle_numbers 的形状必须相同")
+
+    rsd_grid = get_rsd_grid(device_type)
+    unique_times, time_indices = np.unique(times.ravel(), return_inverse=True)
+    class_indices = class_numbers.ravel() - 1
+    data = np.zeros((len(unique_times), rsd_grid.num_classes), dtype=np.int64)
+    data[time_indices, class_indices] = particle_numbers.ravel()
+
+    da = xr.DataArray(
+        data.reshape(-1, *rsd_grid.shape),
+        dims=["time", "velocity_center", "diameter_center"],
+        coords={
+            "time": unique_times,
+            "velocity_center": rsd_grid.velocity.centers,
+            "diameter_center": rsd_grid.diameter.centers,
+            "velocity_width": ("velocity_center", rsd_grid.velocity.widths),
+            "diameter_width": ("diameter_center", rsd_grid.diameter.widths),
+        },
+    )
+
+    return da
