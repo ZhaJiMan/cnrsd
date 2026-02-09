@@ -7,14 +7,16 @@ from datetime import datetime, timezone
 from functools import cache
 from io import BytesIO
 from os import PathLike
-from typing import Any, Literal, NamedTuple, TypeAlias, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple, TypeAlias, TypedDict, cast
 
 import numpy as np
-import pandas as pd
-import xarray as xr
 from bitarray import bitarray
 from bitarray.util import ba2int
 from numpy.typing import ArrayLike, NDArray
+
+if TYPE_CHECKING:
+    import pandas as pd
+    import xarray as xr
 
 __all__ = [
     "RSD",
@@ -650,10 +652,14 @@ def rsds_to_dict(rsds: Sequence[RSD]) -> RSDDict:
 
 def rsds_to_dataframe(rsds: Sequence[RSD]) -> pd.DataFrame:
     """将多个 RSD 对象转换为 dataframe"""
+    import pandas as pd
+
     return pd.DataFrame(rsds_to_dict(rsds))
 
 
 def resample_rsd_dataframe(df: pd.DataFrame, freq: str = "5min") -> pd.DataFrame:
+    import pandas as pd
+
     # 普通列加上时间 grouper 会自动丢弃空时间窗口
     grouper = pd.Grouper(key="time", freq=freq, closed="right", label="right")  # pyright: ignore[reportCallIssue]
     window_flags = df.groupby(["station_id", grouper])["rain_flag"].transform("any")
@@ -680,6 +686,8 @@ def build_rsd_dataarray(
     class_numbers: ArrayLike,
     particle_numbers: ArrayLike,
 ) -> xr.DataArray:
+    import xarray as xr
+
     if device_type not in {0, 1}:
         raise ValueError(f"device_type 的值应该是 0 或 1，实际是 {device_type}")
 
