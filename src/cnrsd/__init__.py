@@ -230,7 +230,7 @@ def get_rsd_grid(device_type: DeviceType) -> RSDGrid:
         case 1:
             return RSD_GRID_200
         case _:
-            raise RSDError(f"device_type 的值应该是 0 或 1，实际是 {device_type}")
+            raise ValueError(f"device_type 的值应该是 0 或 1，实际是 {device_type}")
 
 
 class RSDError(Exception):
@@ -538,31 +538,26 @@ class ClassParams(NamedTuple):
 def lookup_class_params(
     device_types: ArrayLike, class_numbers: ArrayLike
 ) -> ClassParams:
-    # 允许输入是标量
-    device_types = np.asarray(device_types)
+    device_types = np.atleast_1d(np.asarray(device_types))
+    class_numbers = np.atleast_1d(np.asarray(class_numbers, dtype=np.intp))
+    if device_types.shape != class_numbers.shape:
+        raise ValueError("device_types 和 class_numbers 的形状必须相同")
+
     if not ((device_types == 0) | (device_types == 1)).all():
-        raise RSDError("device_types 的元素的值只能是 0 或 1")
+        raise ValueError("device_types 的元素的值只能是 0 或 1")
 
-    # np.where 会进行广播
-    class_indices = np.asarray(class_numbers, dtype=np.intp) - 1
-    class_indices = np.where(
-        device_types.astype(np.bool_),
-        class_indices + RSD_GRID_100.num_classes,
-        class_indices,
-    )
-
+    class_indices = class_numbers - 1
+    class_indices[device_types.astype(np.bool_)] += RSD_GRID_100.num_classes
     class_table = _get_class_table()
 
     try:
-        # advanced indexing 返回 copy
-        class_params = class_table[class_indices, :]
+        class_params = class_table[class_indices, :]  # 返回 copy
     except IndexError as e:
-        raise RSDError("class_numbers 有元素的值超过了 device_types 允许的上限") from e
+        raise ValueError(
+            "class_numbers 有元素的值超过了 device_types 允许的上限"
+        ) from e
 
-    # 使用 ellipsis 至少会返回零维数组
-    args = (class_params[..., i] for i in range(class_params.shape[-1]))
-
-    return ClassParams(*args)
+    return ClassParams(*(class_params[..., i] for i in range(class_params.shape[-1])))
 
 
 def _pluck(iterable: Iterable[object], name: str) -> list[Any]:
