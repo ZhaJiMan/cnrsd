@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, Literal, NamedTuple, TypeAlias, TypedDict
 import numpy as np
 from bitarray import bitarray
 from bitarray.util import ba2int
-from numpy.typing import ArrayLike, NDArray
+from numpy.typing import ArrayLike, DTypeLike, NDArray
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -415,9 +415,9 @@ def _decode_rsd_body(section4: bitarray, ref_time: datetime) -> _RSDBody:
     return rsd_body
 
 
-def _to_datetime64_us(times: Sequence[float]) -> NDArray[np.datetime64]:
+def _to_datetime64_us(seconds: Sequence[float]) -> NDArray[np.datetime64]:
     return (
-        (np.array(times, dtype=np.float64) * 1e6)
+        (np.asarray(seconds, dtype=np.float64) * 1e6)
         .astype(np.int64)
         .astype("datetime64[us]")
     )
@@ -667,10 +667,6 @@ def lookup_class_params(
     return ClassParams(*(class_params[..., i] for i in range(class_params.shape[-1])))
 
 
-def _pluck(iterable: Iterable[object], name: str) -> list[Any]:
-    return [getattr(obj, name) for obj in iterable]
-
-
 class RSDDict(TypedDict):
     station_id: NDArray[np.str_]
     longitude: NDArray[np.float64]
@@ -687,29 +683,24 @@ class RSDDict(TypedDict):
     diameter_width: NDArray[np.float64]
 
 
+def _pluck(iterable: Iterable[object], name: str) -> list[Any]:
+    return [getattr(obj, name) for obj in iterable]
+
+
+def _safe_concat(
+    arrays: Sequence[ArrayLike], dtype: DTypeLike = np.float64
+) -> NDArray[Any]:
+    if len(arrays) == 0:
+        return np.empty(0, dtype=dtype)
+    else:
+        return np.concatenate(arrays, dtype=dtype)
+
+
 def rsds_to_dict(rsds: Sequence[RSD]) -> RSDDict:
     """将多个 `RSD` 对象转换成列式字典
 
     `RSD.to_dict` 方法的批量版本，比循环调用更快。
     """
-    # 需要提前处理空列表，否则后面的 concatenate 会报错
-    if not rsds:
-        return {
-            "station_id": np.array([], dtype=np.str_),
-            "longitude": np.array([], dtype=np.float64),
-            "latitude": np.array([], dtype=np.float64),
-            "time": np.array([], dtype="datetime64[us]"),
-            "sensor_status": np.array([], dtype=np.int64),
-            "device_type": np.array([], dtype=np.int64),
-            "rain_flag": np.array([], dtype=np.bool_),
-            "class_number": np.array([], dtype=np.int64),
-            "particle_number": np.array([], dtype=np.int64),
-            "velocity_center": np.array([], dtype=np.float64),
-            "velocity_width": np.array([], dtype=np.float64),
-            "diameter_center": np.array([], dtype=np.float64),
-            "diameter_width": np.array([], dtype=np.float64),
-        }
-
     # 貌似 pluck 比 attrgetter + zip 要快一点
     repeats = np.array(_pluck(rsds, "num_records"), dtype=np.int64)
     data = {
@@ -722,16 +713,16 @@ def rsds_to_dict(rsds: Sequence[RSD]) -> RSDDict:
         "latitude": np.repeat(
             np.array(_pluck(rsds, "latitude"), dtype=np.float64), repeats
         ),
-        "time": np.concatenate(_pluck(rsds, "times"), dtype="datetime64[us]"),
+        "time": _safe_concat(_pluck(rsds, "times"), dtype="datetime64[us]"),
         "sensor_status": np.repeat(
             np.array(_pluck(rsds, "sensor_status"), dtype=np.int64), repeats
         ),
         "device_type": np.repeat(
             np.array(_pluck(rsds, "device_type"), dtype=np.int64), repeats
         ),
-        "rain_flag": np.concatenate(_pluck(rsds, "rain_flags"), dtype=np.bool_),
-        "class_number": np.concatenate(_pluck(rsds, "class_numbers"), dtype=np.int64),
-        "particle_number": np.concatenate(
+        "rain_flag": _safe_concat(_pluck(rsds, "rain_flags"), dtype=np.bool_),
+        "class_number": _safe_concat(_pluck(rsds, "class_numbers"), dtype=np.int64),
+        "particle_number": _safe_concat(
             _pluck(rsds, "particle_numbers"), dtype=np.int64
         ),
     }
