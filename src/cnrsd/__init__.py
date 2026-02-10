@@ -17,6 +17,8 @@ if TYPE_CHECKING:
     import pandas as pd
     import xarray as xr
 
+__version__ = "0.1.0"
+
 __all__ = [
     "RSD",
     "RSD_GRID_100",
