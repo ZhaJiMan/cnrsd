@@ -276,7 +276,7 @@ SensorStatus: TypeAlias = Literal[0, 1, 2, 3, 4, 5, 6, 7]
 DeviceType: TypeAlias = Literal[0, 1]
 
 
-def get_rsd_grid(device_type: DeviceType) -> RSDGrid:
+def get_rsd_grid(device_type: int) -> RSDGrid:
     """根据设备类型获取雨滴谱的分箱网格"""
     match device_type:
         case 0:
@@ -438,25 +438,37 @@ class RSD:
     Attributes
     ----------
     station_id : str
-        测站标识
+        测站标识。优先使用本地测站标识，其次使用 WMO 站号。
 
     longitude : float
-        经度
+        站点经度
 
     latitude : float
-        纬度
+        站点纬度
 
     sensor_status : {0, 1, 2, 3, 4, 5, 6, 7}
         传感器标识
 
+        - 0：无观测任务
+        - 1：自动观测
+        - 2：人工观测
+        - 3：加盖期间
+        - 4：仪器故障期间
+        - 5：仪器维护期间
+        - 6：日落后日出前无数据
+        - 7：缺测
+
     device_type : {0, 1}
         设备类型
+
+        - 0：雨滴谱设备类型为 100，输出 32 级粒子大小与 32 级粒子速度
+        - 1：雨滴谱设备类型为 200，输出 22 级粒子大小与 22 级粒子速度
 
     reference_time : datetime
         参考时间
 
     times : (n,) ndarray
-        每行对应的时刻
+        每行对应的 UTC 时间
 
     rain_flags : (n,) ndarray
         `True` 表示该行所属的时刻有雨（存在至少一个分级的粒子数非零），
@@ -580,16 +592,17 @@ class RSD:
     def to_dataarray(self) -> xr.DataArray:
         """将 `RSD` 对象转换成 xarray 的 `DataArray` 对象
 
-        维度是 `(time, velocity_center, diameter_center)`，值是粒子数，
+        维度是 `(time, velocity_center, diameter_center)`，数组值是粒子数，
         `velocity_width` 和 `diameter_width` 是辅助坐标，标量属性保存到 `attrs` 中。
+        不再含有 rain_flag 属性，直接用全零的粒子数表示。
 
         如果需要导出 netCDF4 文件，需要用户自行处理 `attrs`。
         """
         da = build_rsd_dataarray(
             device_type=self.device_type,
-            times=self.times,
             class_numbers=self.class_numbers,
             particle_numbers=self.particle_numbers,
+            times=self.times,
         )
 
         da.attrs["station_id"] = self.station_id
@@ -779,14 +792,16 @@ def resample_rsd_dataframe(df: pd.DataFrame, freq: str = "5min") -> pd.DataFrame
 
 
 def build_rsd_dataarray(
-    device_type: DeviceType,
-    times: ArrayLike,
+    device_type: int,
     class_numbers: ArrayLike,
     particle_numbers: ArrayLike,
+    times: ArrayLike | None = None,
 ) -> xr.DataArray:
     """用雨滴谱数据构造 xarray 的 `DataArray` 对象
 
-    维度是 `(time, velocity_center, diameter_center)`，值是粒子数，
+    如果 `times=None`，返回维度是 `(velocity_center, diameter_center)` 的二维 `DataArray`；
+    否则返回维度是 `(time, velocity_center, diameter_center)` 的三维 `DataArray`。数组值是粒子数。
+
     `velocity_width` 和 `diameter_width` 是辅助坐标，相比 `RSD.to_dataarray` 方法不含元数据。
     """
     import xarray as xr
@@ -794,32 +809,44 @@ def build_rsd_dataarray(
     if device_type not in {0, 1}:
         raise ValueError(f"device_type 的值应该是 0 或 1，实际是 {device_type}")
 
-    times = np.atleast_1d(np.asarray(times, dtype="datetime64[us]"))
     class_numbers = np.atleast_1d(np.asarray(class_numbers, dtype=np.intp))
     particle_numbers = np.atleast_1d(np.asarray(particle_numbers, dtype=np.int64))
-    if not (times.shape == class_numbers.shape == particle_numbers.shape):
-        raise ValueError("times, class_numbers 和 particle_numbers 的形状必须相同")
+    if class_numbers.shape != particle_numbers.shape:
+        raise ValueError("class_numbers 和 particle_numbers 的形状必须相同")
 
     rsd_grid = get_rsd_grid(device_type)
-    unique_times, time_indices = np.unique(times.ravel(), return_inverse=True)
     class_indices = class_numbers.ravel() - 1
-    data = np.zeros((len(unique_times), rsd_grid.num_classes), dtype=np.int64)
+    coords = {
+        "velocity_center": rsd_grid.velocity.centers,
+        "diameter_center": rsd_grid.diameter.centers,
+        "velocity_width": ("velocity_center", rsd_grid.velocity.widths),
+        "diameter_width": ("diameter_center", rsd_grid.diameter.widths),
+    }
+
+    if times is None:
+        indexer = (class_indices,)
+        flat_shape = (rsd_grid.num_classes,)
+        grid_shape = rsd_grid.shape
+        dims = ["velocity_center", "diameter_center"]
+    else:
+        times = np.atleast_1d(np.asarray(times, dtype="datetime64[us]"))
+        if times.shape != class_numbers.shape:
+            raise ValueError("times 和 class_numbers 的形状必须相同")
+
+        # np.unique 默认返回排序后的唯一值
+        unique_times, time_indices = np.unique(times.ravel(), return_inverse=True)
+        indexer = (time_indices, class_indices)
+        flat_shape = (len(unique_times), rsd_grid.num_classes)
+        grid_shape = (len(unique_times), *rsd_grid.shape)
+        dims = ["time", "velocity_center", "diameter_center"]
+        coords["time"] = unique_times
+
+    data = np.zeros(flat_shape, dtype=np.int64)
     try:
-        data[time_indices, class_indices] = particle_numbers.ravel()
+        data[indexer] = particle_numbers.ravel()
     except IndexError as e:
         raise ValueError("class_numbers 有元素的值超过了 device_type 允许的上限") from e
-
-    da = xr.DataArray(
-        data.reshape(-1, *rsd_grid.shape),
-        dims=["time", "velocity_center", "diameter_center"],
-        coords={
-            "time": unique_times,
-            "velocity_center": rsd_grid.velocity.centers,
-            "diameter_center": rsd_grid.diameter.centers,
-            "velocity_width": ("velocity_center", rsd_grid.velocity.widths),
-            "diameter_width": ("diameter_center", rsd_grid.diameter.widths),
-        },
-    )
+    da = xr.DataArray(data.reshape(grid_shape), dims=dims, coords=coords)
 
     return da
 
