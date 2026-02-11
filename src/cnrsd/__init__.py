@@ -579,7 +579,7 @@ class RSD:
 
         标量属性会广播到与行数相同的长度，行数为零时得到每列都是空数组的字典。
 
-        会根据 `class_numbers` 属性，追加速度和直径分箱的中心和宽度的列，方便后续过滤和统计。
+        会根据 `class_numbers` 追加对应的速度和直径分箱的中心和宽度的列，方便后续过滤和统计。
 
         结果可以传给 pandas 或 polars 以构造 `DataFrame` 对象。
         """
@@ -592,11 +592,11 @@ class RSD:
     def to_dataarray(self) -> xr.DataArray:
         """将 `RSD` 对象转换成 xarray 的 `DataArray` 对象
 
-        维度是 `(time, velocity_center, diameter_center)`，数组值是粒子数，
+        维度是 `(time, velocity_center, diameter_center)`，元素值是粒子数，
         `velocity_width` 和 `diameter_width` 是辅助坐标，标量属性保存到 `attrs` 中。
         不再含有 rain_flag 属性，直接用全零的粒子数表示。
 
-        如果需要导出 netCDF4 文件，需要用户自行处理 `attrs`。
+        如果需要保存成 netCDF4 文件，需要用户自行处理 `attrs`。
         """
         da = build_rsd_dataarray(
             device_type=self.device_type,
@@ -661,14 +661,16 @@ def lookup_class_params(
 ) -> ClassParams:
     """根据设备类型和分级编号查找对应的速度和直径的分箱参数（中心、宽度和上下界）"""
     device_types = np.atleast_1d(np.asarray(device_types))
-    class_numbers = np.atleast_1d(np.asarray(class_numbers, dtype=np.intp))
+    class_numbers = np.atleast_1d(np.asarray(class_numbers))
     if device_types.shape != class_numbers.shape:
         raise ValueError("device_types 和 class_numbers 的形状必须相同")
 
     if not ((device_types == 0) | (device_types == 1)).all():
         raise ValueError("device_types 的元素的值只能是 0 或 1")
+    if not np.issubdtype(class_numbers.dtype, np.integer):
+        raise TypeError("class_numbers 必须是整数类型")
 
-    class_indices = class_numbers - 1
+    class_indices = class_numbers.astype(np.intp) - 1
     class_indices[device_types.astype(np.bool_)] += RSD_GRID_100.num_classes
     class_table = _get_class_table()
 
@@ -765,6 +767,7 @@ def resample_rsd_dataframe(df: pd.DataFrame, freq: str = "5min") -> pd.DataFrame
     """对 `RSD` 转换得到的 pandas `DataFrame` 进行时间重采样
 
     要求 `df` 含有 `station_id`、`time`、`class_number`、`rain_flag` 和 `particle_number` 列。
+    换句话说最好应用于 `RSD.to_dataframe` 或 `rsds_to_dataframe` 的返回值。
 
     会按 `station_id` 和 `time` 进行分组，计算 `freq` 时间窗口内 `particle_number` 的和。
     并且能正确处理 `rain_flag=False` 的占位行。
@@ -772,9 +775,9 @@ def resample_rsd_dataframe(df: pd.DataFrame, freq: str = "5min") -> pd.DataFrame
     import pandas as pd
 
     # 普通列加上时间 grouper 会自动丢弃空时间窗口
+    # 提前过滤时间窗口里占位的无雨行
     grouper = pd.Grouper(key="time", freq=freq, closed="right", label="right")  # pyright: ignore[reportCallIssue]
     window_flags = df.groupby(["station_id", grouper])["rain_flag"].transform("any")
-    # 提前过滤时间窗口里占位的无雨行
     df = cast(pd.DataFrame, df[~window_flags | df["rain_flag"]])
 
     agg_map = {col: "first" for col in df.columns if col}
@@ -799,20 +802,24 @@ def build_rsd_dataarray(
 ) -> xr.DataArray:
     """用雨滴谱数据构造 xarray 的 `DataArray` 对象
 
-    如果 `times=None`，返回维度是 `(velocity_center, diameter_center)` 的二维 `DataArray`；
-    否则返回维度是 `(time, velocity_center, diameter_center)` 的三维 `DataArray`。数组值是粒子数。
+    `times=None` 时 `DataArray` 的维度是 `(velocity_center, diameter_center)`；
+    否则会按时间分组，维度是 `(time, velocity_center, diameter_center)`。
 
-    `velocity_width` 和 `diameter_width` 是辅助坐标，相比 `RSD.to_dataarray` 方法不含元数据。
+    元素值是粒子数，`velocity_width` 和 `diameter_width` 是辅助坐标。
+    相比 `RSD.to_dataarray` 方法不含元数据。
     """
     import xarray as xr
 
     if device_type not in {0, 1}:
         raise ValueError(f"device_type 的值应该是 0 或 1，实际是 {device_type}")
 
-    class_numbers = np.atleast_1d(np.asarray(class_numbers, dtype=np.intp))
-    particle_numbers = np.atleast_1d(np.asarray(particle_numbers, dtype=np.int64))
+    class_numbers = np.atleast_1d(np.asarray(class_numbers))
+    particle_numbers = np.atleast_1d(np.asarray(particle_numbers))
     if class_numbers.shape != particle_numbers.shape:
         raise ValueError("class_numbers 和 particle_numbers 的形状必须相同")
+
+    if not np.issubdtype(class_numbers.dtype, np.integer):
+        raise TypeError("class_numbers 必须是整数类型")
 
     rsd_grid = get_rsd_grid(device_type)
     class_indices = class_numbers.ravel() - 1
@@ -829,6 +836,7 @@ def build_rsd_dataarray(
         grid_shape = rsd_grid.shape
         dims = ["velocity_center", "diameter_center"]
     else:
+        # TODO: 时间精度截断？
         times = np.atleast_1d(np.asarray(times, dtype="datetime64[us]"))
         if times.shape != class_numbers.shape:
             raise ValueError("times 和 class_numbers 的形状必须相同")
@@ -841,7 +849,7 @@ def build_rsd_dataarray(
         dims = ["time", "velocity_center", "diameter_center"]
         coords["time"] = unique_times
 
-    data = np.zeros(flat_shape, dtype=np.int64)
+    data = np.zeros(flat_shape, dtype=particle_numbers.dtype)
     try:
         data[indexer] = particle_numbers.ravel()
     except IndexError as e:
@@ -866,3 +874,22 @@ def get_bin_edges(centers: ArrayLike, widths: ArrayLike) -> NDArray[np.float64]:
     edges[-1] = centers[-1] + half_widths[-1]
 
     return edges
+
+
+def mass_weighted_diameter(diameters: ArrayLike, particle_numbers: ArrayLike) -> float:
+    """计算质量加权平均直径。输入是空数组时会返回 0.0。"""
+    # 转换成 float64 避免幂运算溢出
+    diameters = np.asarray(diameters, dtype=np.float64)
+    particle_numbers = np.asarray(particle_numbers, dtype=np.float64)
+    if diameters.shape != particle_numbers.shape:
+        raise ValueError("diameters 和 particle_numbers 的形状必须相同")
+
+    # 因为是非负数加和，可以直接跟 0 做比较
+    denom = np.sum(particle_numbers * diameters**3)
+    if denom == 0:
+        return 0.0
+
+    num = np.sum(particle_numbers * diameters**4)
+    dm = float(num / denom)
+
+    return dm
