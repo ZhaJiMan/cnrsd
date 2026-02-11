@@ -594,7 +594,7 @@ class RSD:
         return rsds_to_dataframe([self])
 
     def to_dataarray(self) -> xr.DataArray:
-        """将 `RSD` 对象转换成 xarray 的 `DataArray` 对象
+        """将 `RSD` 对象转换成多维的 xarray 的 `DataArray` 对象
 
         维度是 `(time, velocity_center, diameter_center)`，元素值是粒子数，
         `velocity_width` 和 `diameter_width` 是辅助坐标，标量属性保存到 `attrs` 中。
@@ -804,7 +804,7 @@ def build_rsd_dataarray(
     particle_numbers: ArrayLike,
     times: ArrayLike | None = None,
 ) -> xr.DataArray:
-    """用雨滴谱数据构造 xarray 的 `DataArray` 对象
+    """用雨滴谱数据构造多维的 xarray 的 `DataArray` 对象
 
     `times=None` 时 `DataArray` 的维度是 `(velocity_center, diameter_center)`；
     否则会按时间分组，维度是 `(time, velocity_center, diameter_center)`。

@@ -31,9 +31,12 @@ all = [
 
 [dependency-groups]
 dev = [
+    "cmaps>=2.0.1",
     "ipykernel>=7.1.0",
     "line-profiler>=5.0.0",
+    "loguru>=0.7.3",
     "matplotlib>=3.10.8",
+    "pyarrow>=23.0.0",
     "ruff>=0.14.14",
     "typos>=1.43.4",
 ]
@@ -44,7 +47,7 @@ Issues = "https://github.com/ZhaJiMan/cnrsd/issues"
 Changelog = "https://github.com/ZhaJiMan/cnrsd/blob/main/CHANGELOG.md"
 
 [build-system]
-requires = ["uv_build>=0.9.10,<0.10.0"]
+requires = ["uv_build>=0.10.2,<0.11.0"]
 build-backend = "uv_build"
 
 [[tool.uv.index]]
