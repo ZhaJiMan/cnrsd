@@ -426,9 +426,6 @@ def _to_datetime64_us(seconds: Sequence[float]) -> NDArray[np.datetime64]:
     )
 
 
-StrPath: TypeAlias = str | PathLike[str]
-
-
 @dataclass
 class RSD:
     """雨滴谱数据
@@ -572,7 +569,7 @@ class RSD:
         )
 
     @classmethod
-    def from_file(cls, filepath: StrPath):
+    def from_file(cls, filepath: str | PathLike[str]):
         """从文件构造 `RSD` 对象"""
         # 小文件直接读入内存
         with open(filepath, mode="rb") as f:
@@ -600,7 +597,8 @@ class RSD:
         `velocity_width` 和 `diameter_width` 是辅助坐标，标量属性保存到 `attrs` 中。
         不再含有 rain_flag 属性，直接用全零的粒子数表示。
 
-        如果需要保存成 netCDF4 文件，需要用户自行处理 `attrs`。
+        如果需要保存成 netCDF4 文件，需要用户自行处理 `attrs`，例如将 `reference_time` 属性
+        从 datetime 类型转换成字符串。
         """
         da = build_rsd_dataarray(
             device_type=self.device_type,
@@ -614,7 +612,7 @@ class RSD:
         da.attrs["latitude"] = self.latitude
         da.attrs["sensor_status"] = self.sensor_status
         da.attrs["device_type"] = self.device_type
-        da.attrs["reference_time"] = self.reference_time  # not netCDF type
+        da.attrs["reference_time"] = self.reference_time
 
         return da
 

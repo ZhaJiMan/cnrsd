@@ -18,7 +18,7 @@ import cnrsd
 
 # 读取 BUFR 文件
 filepath = "sample/Z_SURF_I_53691_20240809000000_O_AWS-RSD-MM_FTM.BIN"
-rsd = RSD.from_file(filepath)
+rsd = cnrsd.RSD.from_file(filepath)
 
 # 转换成方便处理的类型
 df = rsd.to_dataframe()
