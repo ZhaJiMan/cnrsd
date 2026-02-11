@@ -2,11 +2,12 @@
 name = "cnrsd"
 version = "0.1.0"
 description = "解析中国 BUFR 格式的雨滴谱数据"
-authors = [{ name = "ZhaJiMan", email = "915023793@qq.com" }]
+authors = [
+    { name = "ZhaJiMan", email = "915023793@qq.com" }
+]
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
-keywords = ["BUFR", "atmospheric science"]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
