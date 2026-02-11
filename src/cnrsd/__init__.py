@@ -34,6 +34,8 @@ __all__ = [
     "get_bin_edges",
     "get_rsd_grid",
     "lookup_class_params",
+    "mass_weighted_diameter",
+    "read_file",
     "resample_rsd_dataframe",
     "rsds_to_dataframe",
     "rsds_to_dict",
@@ -425,6 +427,9 @@ def _to_datetime64_us(seconds: Sequence[float]) -> NDArray[np.datetime64]:
     )
 
 
+StrPath: TypeAlias = str | PathLike[str]
+
+
 @dataclass
 class RSD:
     """雨滴谱数据
@@ -568,7 +573,7 @@ class RSD:
         )
 
     @classmethod
-    def from_file(cls, filepath: str | PathLike[str]):
+    def from_file(cls, filepath: StrPath):
         """从文件构造 `RSD` 对象"""
         # 小文件直接读入内存
         with open(filepath, mode="rb") as f:
@@ -613,6 +618,11 @@ class RSD:
         da.attrs["reference_time"] = self.reference_time  # not netCDF type
 
         return da
+
+
+def read_file(filepath: StrPath) -> RSD:
+    """读取 BUFR 文件并返回 `RSD` 对象"""
+    return RSD.from_file(filepath)
 
 
 def _vstack_bin_params(bin_axis: BinAxis) -> NDArray[np.float64]:
