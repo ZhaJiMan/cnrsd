@@ -35,7 +35,6 @@ __all__ = [
     "get_rsd_grid",
     "lookup_class_params",
     "mass_weighted_diameter",
-    "read_file",
     "resample_rsd_dataframe",
     "rsds_to_dataframe",
     "rsds_to_dict",
@@ -618,11 +617,6 @@ class RSD:
         da.attrs["reference_time"] = self.reference_time  # not netCDF type
 
         return da
-
-
-def read_file(filepath: StrPath) -> RSD:
-    """读取 BUFR 文件并返回 `RSD` 对象"""
-    return RSD.from_file(filepath)
 
 
 def _vstack_bin_params(bin_axis: BinAxis) -> NDArray[np.float64]:
