@@ -12,7 +12,7 @@ import cnrsd
 
 def main() -> None:
     filepath = Path("sample/Z_SURF_I_53691_20240809000000_O_AWS-RSD-MM_FTM.BIN")
-    rsd = cnrsd.RSD.from_file(filepath)
+    rsd = cnrsd.read_file(filepath)
     da = rsd.to_dataarray()
 
     fig, ax = plt.subplots()

@@ -36,6 +36,7 @@ __all__ = [
     "get_rsd_grid",
     "lookup_class_params",
     "mass_weighted_diameter",
+    "read_file",
     "resample_rsd_dataframe",
     "rsds_to_dataframe",
     "rsds_to_dict",
@@ -646,6 +647,9 @@ class RSD:
         da.attrs["reference_time"] = self.reference_time
 
         return da
+
+
+read_file = RSD.from_file
 
 
 def _vstack_bin_params(bin_axis: BinAxis) -> NDArray[np.float64]:
