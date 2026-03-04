@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -17,7 +18,7 @@ if TYPE_CHECKING:
     import pandas as pd
     import xarray as xr
 
-__version__ = "0.1.0"
+__version__ = "0.1.2"
 
 __all__ = [
     "RSD",
@@ -42,8 +43,8 @@ __all__ = [
 
 # 根据 BUFR 表格已知的常量
 _MISSING_VALUE = 2**16 - 1
-_TIME_INCREMENT = -5
-_SHORT_TIME_INCREMENT = 1
+_TIME_INCREMENT = -5.0
+_SHORT_TIME_INCREMENT = 1.0
 _REP_FACTOR_7 = 5
 
 # section4 的大小不是固定的
@@ -53,6 +54,9 @@ _SECTION1_SIZE = 23
 _SECTION3_SIZE = 9
 _SECTION5_SIZE = 4
 _TRAILER_SIZE = 4
+
+# 站名只允许出现数字和英文字母
+_STATION_ID_PATTERN = re.compile(r"[0-9a-zA-Z]+")
 
 
 @dataclass
@@ -285,7 +289,7 @@ def get_rsd_grid(device_type: int) -> RSDGrid:
         case 1:
             return RSD_GRID_200
         case _:
-            raise ValueError(f"device_type 的值应该是 0 或 1，实际是 {device_type}")
+            raise ValueError(f"{device_type=} 应该是 0 或 1")
 
 
 class RSDError(Exception):
@@ -303,11 +307,21 @@ def _decode_local_station_id(section4: bitarray) -> str:
 
 
 def _decode_station_id(section4: bitarray) -> str:
-    # 非 WMO 区站使用本地测站标识
-    return _decode_local_station_id(section4) or _decode_wmo_station_id(section4)
+    # WMO 站点的 local_station_id 全填充 \x00
+    # 非 WMO 站点的 block_number 是 0，local_station_id 可能是英文数字混合的 id 加上 \x00
+    # 但也存在 local_station_id 含有 \x03 的情况，此时直接报错
+    local_station_id = _decode_local_station_id(section4)
+    if len(local_station_id) == 0:
+        return _decode_wmo_station_id(section4)
+
+    if _STATION_ID_PATTERN.fullmatch(local_station_id) is None:
+        raise RSDError(f"{local_station_id=} 含有数字和英文字母以外的字符")
+
+    return local_station_id
 
 
 def _decode_ref_time(section4: bitarray) -> datetime:
+    # TODO: 存在时间是 1718-06-28 的情况
     year = ba2int(section4[293:305])
     month = ba2int(section4[305:309])
     day = ba2int(section4[309:315])
@@ -322,6 +336,7 @@ def _decode_value(value: int, factor: int, offset: int) -> float:
 
 
 def _decode_lonlat(section4: bitarray) -> tuple[float, float]:
+    # TODO: 存在经纬度超出中国范围的情况
     i0, i1, i2 = 326, 351, 377
     lat = _decode_value(ba2int(section4[i0:i1]), 5, -9000000)
     lon = _decode_value(ba2int(section4[i1:i2]), 5, -18000000)
@@ -330,27 +345,48 @@ def _decode_lonlat(section4: bitarray) -> tuple[float, float]:
 
 
 def _decode_sensor_status(section4: bitarray) -> SensorStatus:
-    return cast(SensorStatus, ba2int(section4[377:380]))
+    sensor_status = ba2int(section4[377:380])
+    if sensor_status not in {0, 1, 2, 3, 4, 5, 6, 7}:
+        raise RSDError(f"{sensor_status=} 应该是 0 到 7")
+
+    return cast(SensorStatus, sensor_status)
 
 
 def _decode_device_type(section4: bitarray) -> DeviceType:
-    return cast(DeviceType, ba2int(section4[380:384]))
+    # 存在 device_type = 7 的情况
+    device_type = ba2int(section4[380:384])
+    if device_type not in {0, 1}:
+        raise RSDError(f"{device_type=} 应该是 0 或 1")
+
+    return cast(DeviceType, device_type)
 
 
 def _decode_time_increment(section4: bitarray) -> float:
-    return _decode_value(ba2int(section4[385:397]), 0, -2048)
+    time_increment = _decode_value(ba2int(section4[385:397]), 0, -2048)
+    if time_increment != _TIME_INCREMENT:  # 没有浮点数比较问题
+        raise RSDError(f"{time_increment=} 应该是 {_TIME_INCREMENT}")
+
+    return time_increment
 
 
 def _decode_short_time_increment(section4: bitarray) -> float:
-    return _decode_value(ba2int(section4[397:405]), 0, -128)
+    short_time_increment = _decode_value(ba2int(section4[397:405]), 0, -128)
+    if short_time_increment != _SHORT_TIME_INCREMENT:
+        raise RSDError(f"{short_time_increment=} 应该是 {_SHORT_TIME_INCREMENT}")
+
+    return short_time_increment
 
 
 def _decode_rep_factor_11(section4: bitarray) -> Literal[0, 1]:
     return cast(Literal[0, 1], section4[384])
 
 
-def _decode_rep_factor_7(section4: bitarray) -> Literal[5]:
-    return cast(Literal[5], ba2int(section4[405:413]))
+def _decode_rep_factor_7(section4: bitarray) -> int:
+    rep_factor_7 = ba2int(section4[405:413])
+    if rep_factor_7 != _REP_FACTOR_7:
+        raise RSDError(f"{rep_factor_7=} 应该是 {_REP_FACTOR_7}")
+
+    return rep_factor_7
 
 
 @dataclass
@@ -380,6 +416,7 @@ def _decode_rsd_body(section4: bitarray, ref_time: datetime) -> _RSDBody:
     time = ref_time.timestamp() + _TIME_INCREMENT * 60
 
     # rep_factor_11 为 0 表示 5 个时刻均无雨，插入 5 行占位行
+    # 为了插入占位行，需要提前知道 rep_factor_7 和时间增量的值
     rsd_body = _RSDBody()
     rep_factor_11 = _decode_rep_factor_11(section4)
     if rep_factor_11 == 0:
@@ -388,10 +425,10 @@ def _decode_rsd_body(section4: bitarray, ref_time: datetime) -> _RSDBody:
             rsd_body.append_placeholder(time)
         return rsd_body
 
-    # 常量不从 section4 中解析，因为 rep_factor_11 为零时无法读取常量插入占位行
-    # time_increment = _decode_time_increment(section4)
-    # short_time_increment = _decode_short_time_increment(section4)
-    # rep_factor_7 = _decode_rep_factor_7(section4)
+    # 通过调用函数间接检查硬编码的常量是否跟 BUFR 文件一致
+    _decode_time_increment(section4)
+    _decode_short_time_increment(section4)
+    _decode_rep_factor_7(section4)
 
     pos = 413
     for _ in range(_REP_FACTOR_7):
@@ -407,8 +444,8 @@ def _decode_rsd_body(section4: bitarray, ref_time: datetime) -> _RSDBody:
         for _ in range(rep_factor_5):
             i0, i1, i2, i3, i4 = pos, pos + 12, pos + 18, pos + 26, pos + 42  # noqa: F841
             class_number = ba2int(section4[i0:i1])
-            # qc_significance = ba2int(section4[i1:i2])
-            # qc_code = ba2int(section4[i2:i3])
+            # qc_significance = ba2int(section4[i1:i2])  # =62
+            # qc_code = ba2int(section4[i2:i3])  # =0
             particle_number = ba2int(section4[i3:i4])
             # TODO: 可能存在部分分级的粒子数缺测的情况吗？
             if particle_number != _MISSING_VALUE:
@@ -504,16 +541,10 @@ class RSD:
     __hash__ = None  # pyright: ignore[reportAssignmentType]
 
     def __post_init__(self) -> None:
-        if self.sensor_status not in {0, 1, 2, 3, 4, 5, 6, 7}:
-            raise RSDError(
-                f"sensor_status 的值应该是 0 到 7，实际是 {self.sensor_status}"
-            )
-        if self.device_type not in {0, 1}:
-            raise RSDError(f"device_type 的值应该是 0 或 1，实际是 {self.device_type}")
-
         self.num_records = len(self.times)
         self.grid = get_rsd_grid(self.device_type)
 
+        # TODO: 检查 class_numbers 和 particle_numbers 的值是否合法
         # 存在 device_type 跟 class_number 不匹配的情况
         if self.num_records > 0:
             max_class_number = self.class_numbers.max()
@@ -530,7 +561,7 @@ class RSD:
             f.seek(_HEADER_SIZE)
             section0 = f.read(_SECTION0_SIZE)
             if section0[:4] != b"BUFR":
-                raise RSDError(f"section0 的开头应该是 b'BUFR'，实际是 {section0[:4]}")
+                raise RSDError(f"section0[:4]={section0[:4]} 应该是 b'BUFR'")
 
             bufr_size = int.from_bytes(section0[4:7], byteorder="big")
             section4_size = (
@@ -545,7 +576,7 @@ class RSD:
 
             section5 = f.read(_SECTION5_SIZE)
             if section5 != b"7777":
-                raise RSDError(f"section5 的值应该是 b'7777'，实际是 {section5}")
+                raise RSDError(f"{section5=} 应该是 b'7777'")
 
         section4 = bitarray(section4)
         station_id = _decode_station_id(section4)
@@ -667,6 +698,7 @@ def lookup_class_params(
     if device_types.shape != class_numbers.shape:
         raise ValueError("device_types 和 class_numbers 的形状必须相同")
 
+    # 存在 device_type = 7 的文件
     if not ((device_types == 0) | (device_types == 1)).all():
         raise ValueError("device_types 的元素的值只能是 0 或 1")
     if not np.issubdtype(class_numbers.dtype, np.integer):
@@ -813,7 +845,7 @@ def build_rsd_dataarray(
     import xarray as xr
 
     if device_type not in {0, 1}:
-        raise ValueError(f"device_type 的值应该是 0 或 1，实际是 {device_type}")
+        raise ValueError(f"{device_type=} 应该是 0 或 1")
 
     class_numbers = np.atleast_1d(np.asarray(class_numbers))
     particle_numbers = np.atleast_1d(np.asarray(particle_numbers))
