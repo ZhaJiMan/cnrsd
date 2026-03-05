@@ -504,10 +504,10 @@ class RSD:
         - 1：雨滴谱设备类型为 200，输出 22 级粒子大小与 22 级粒子速度
 
     reference_time : datetime
-        参考时间
+        参考时间。含 UTC 时区信息
 
     times : (n,) ndarray
-        每行对应的 UTC 时间
+        每行对应的 UTC 时间。但不含时区信息
 
     rain_flags : (n,) ndarray
         `True` 表示该行所属的时刻有雨（存在至少一个分级的粒子数非零），

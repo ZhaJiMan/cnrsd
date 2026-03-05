@@ -18,7 +18,7 @@ import cnrsd
 
 # 读取 BUFR 文件
 filepath = "sample/Z_SURF_I_53691_20240809000000_O_AWS-RSD-MM_FTM.BIN"
-rsd = cnrsd.RSD.from_file(filepath)
+rsd = cnrsd.read_file(filepath)
 
 # 转换成方便处理的类型
 df = rsd.to_dataframe()
@@ -27,6 +27,8 @@ da = rsd.to_dataarray()
 # 批量转换类型
 df = cnrsd.rsds_to_dataframe(rsds)
 ```
+
+> 以什么形式表示雨滴谱数据，方便保存和数据分析，仍在探索当中。欢迎讨论。
 
 示例：[examples/plot_station.py](examples/plot_station.py)
 
