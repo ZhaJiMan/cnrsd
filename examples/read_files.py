@@ -15,7 +15,6 @@ def make_rsd_pattern(station_id: str) -> str:
 
 
 def main() -> None:
-    # dirpath = Path("data")
     dirpath = Path("data")
     station_id = "53691"
     pattern = make_rsd_pattern(station_id)
