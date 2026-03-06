@@ -57,7 +57,7 @@ _SECTION5_SIZE = 4
 _TRAILER_SIZE = 4
 
 # 站名只允许出现数字和英文字母
-_STATION_ID_PATTERN = re.compile(r"[0-9a-zA-Z]+")
+_STATION_ID_PATTERN = re.compile(r"[0-9a-zA-Z]*")
 
 
 @dataclass
@@ -298,27 +298,31 @@ class RSDError(Exception):
 
 
 def _decode_wmo_station_id(section4: bitarray) -> str:
+    # 非 WMO 站点存在 block_number 为零的情况
     block_number = ba2int(section4[32:39])
     station_number = ba2int(section4[39:49])
     return f"{block_number:02d}{station_number:03d}"
 
 
 def _decode_local_station_id(section4: bitarray) -> str:
-    return section4[49:209].tobytes().decode("ascii").rstrip("\x00")
+    # 假设 WMO 站点的 local_station_id 全填充 \x00
+    # 非 WMO 站点的 local_station_id 由字母、数字和 \x00 组成
+    data = section4[49:209].tobytes()
+    try:
+        local_station_id = data.decode("ascii").rstrip("\x00")
+    except UnicodeDecodeError as e:
+        raise RSDError(f"{data=} 包含非 ASCII 字符") from e
 
-
-def _decode_station_id(section4: bitarray) -> str:
-    # WMO 站点的 local_station_id 全填充 \x00
-    # 非 WMO 站点的 block_number 是 0，local_station_id 可能是英文数字混合的 id 加上 \x00
-    # 但也存在 local_station_id 含有 \x03 的情况，此时直接报错
-    local_station_id = _decode_local_station_id(section4)
-    if len(local_station_id) == 0:
-        return _decode_wmo_station_id(section4)
-
+    # 存在含有 \x03 的情况，这里不予接受
     if _STATION_ID_PATTERN.fullmatch(local_station_id) is None:
         raise RSDError(f"{local_station_id=} 含有数字和英文字母以外的字符")
 
     return local_station_id
+
+
+def _decode_station_id(section4: bitarray) -> str:
+    # 优先选择非空的 local_station_id
+    return _decode_local_station_id(section4) or _decode_wmo_station_id(section4)
 
 
 def _decode_ref_time(section4: bitarray) -> datetime:
@@ -427,9 +431,9 @@ def _decode_rsd_body(section4: bitarray, ref_time: datetime) -> _RSDBody:
         return rsd_body
 
     # 通过调用函数间接检查硬编码的常量是否跟 BUFR 文件一致
-    _decode_time_increment(section4)
-    _decode_short_time_increment(section4)
-    _decode_rep_factor_7(section4)
+    time_increment = _decode_time_increment(section4)  # noqa: F841
+    short_time_increment = _decode_short_time_increment(section4)  # noqa: F841
+    rep_factor_7 = _decode_rep_factor_7(section4)  # noqa: F841
 
     pos = 413
     for _ in range(_REP_FACTOR_7):
