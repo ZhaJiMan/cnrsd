@@ -711,6 +711,8 @@ def lookup_class_params(
         raise ValueError("device_types 的元素的值只能是 0 或 1")
     if not np.issubdtype(class_numbers.dtype, np.integer):
         raise TypeError("class_numbers 必须是整数类型")
+    if (class_numbers < 1).any():
+        raise ValueError("class_numbers 的元素的值必须 >= 1")
 
     class_indices = class_numbers.astype(np.intp) - 1
     class_indices[device_types.astype(np.bool_)] += RSD_GRID_100.num_classes
@@ -856,12 +858,15 @@ def build_rsd_dataarray(
         raise ValueError(f"{device_type=} 应该是 0 或 1")
 
     class_numbers = np.atleast_1d(np.asarray(class_numbers))
+    if not np.issubdtype(class_numbers.dtype, np.integer):
+        raise TypeError("class_numbers 必须是整数类型")
+    if (class_numbers < 1).any():
+        raise ValueError("class_numbers 的元素的值必须 >= 1")
+
+    # 允许 particle_numbers 是浮点数类型
     particle_numbers = np.atleast_1d(np.asarray(particle_numbers))
     if class_numbers.shape != particle_numbers.shape:
         raise ValueError("class_numbers 和 particle_numbers 的形状必须相同")
-
-    if not np.issubdtype(class_numbers.dtype, np.integer):
-        raise TypeError("class_numbers 必须是整数类型")
 
     rsd_grid = get_rsd_grid(device_type)
     class_indices = class_numbers.ravel() - 1
