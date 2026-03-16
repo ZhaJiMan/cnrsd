@@ -34,6 +34,7 @@ __all__ = [
     "build_rsd_dataarray",
     "get_bin_edges",
     "get_rsd_grid",
+    "gunn_kinzer_velocity",
     "lookup_class_params",
     "mass_weighted_diameter",
     "read_file",
@@ -714,14 +715,13 @@ def lookup_class_params(
     if (class_numbers < 1).any():
         raise ValueError("class_numbers 的元素的值必须 >= 1")
 
-    max_numbers = np.where(
-        device_types, RSD_GRID_200.num_classes, RSD_GRID_100.num_classes
-    )
+    mask_200 = device_types.astype(np.bool_)
+    max_numbers = np.where(mask_200, RSD_GRID_200.num_classes, RSD_GRID_100.num_classes)
     if (class_numbers > max_numbers).any():
         raise ValueError("class_numbers 的元素的值超过了 device_types 允许的上限")
 
     class_indices = class_numbers.astype(np.intp) - 1
-    class_indices[device_types.astype(np.bool_)] += RSD_GRID_100.num_classes
+    class_indices[mask_200] += RSD_GRID_100.num_classes
     class_table = _get_class_table()
     class_params = class_table[class_indices, :]  # 返回 copy
 
@@ -757,6 +757,7 @@ def _safe_concat(
         return np.concatenate(arrays, dtype=dtype)
 
 
+# TODO: 添加 add_class_params 开关
 def rsds_to_dict(rsds: Sequence[RSD]) -> RSDDict:
     """将多个 `RSD` 对象转换成列式字典
 
@@ -868,7 +869,7 @@ def build_rsd_dataarray(
 
     # 允许 particle_numbers 是浮点数类型
     particle_numbers = np.atleast_1d(np.asarray(particle_numbers))
-    if class_numbers.shape != particle_numbers.shape:
+    if particle_numbers.shape != class_numbers.shape:
         raise ValueError("class_numbers 和 particle_numbers 的形状必须相同")
 
     coords = {
@@ -941,3 +942,12 @@ def mass_weighted_diameter(diameters: ArrayLike, particle_numbers: ArrayLike) ->
     dm = float(num / denom)
 
     return dm
+
+
+def gunn_kinzer_velocity(diameter: ArrayLike) -> NDArray[np.float64]:
+    """计算液态雨滴的末速度。输入输出的单位是 mm 和 m/s。"""
+    diameter = np.asarray(diameter, dtype=np.float64)
+    coeffs = [-0.002362, 0.07934, -0.9551, 4.932, -0.1021]
+    velocity = np.polyval(coeffs, diameter)
+
+    return cast(NDArray[np.float64], velocity)

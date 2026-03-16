@@ -6,6 +6,8 @@ from pathlib import Path
 
 import cmaps
 import matplotlib.pyplot as plt
+import numpy as np
+from matplotlib.colors import LogNorm
 
 import cnrsd
 
@@ -17,16 +19,20 @@ def main() -> None:
 
     fig, ax = plt.subplots()
     ax.set_xlim(0, 5)
-    ax.set_ylim(0, 12)
+    ax.set_ylim(0, 10)
 
     pc = ax.pcolormesh(
         cnrsd.get_bin_edges(da.diameter_center, da.diameter_width),
         cnrsd.get_bin_edges(da.velocity_center, da.velocity_width),
         da.sum("time"),
         cmap=cmaps.WhiteBlueGreenYellowRed,
+        norm=LogNorm(vmin=1),
         ec=(0, 0, 0, 0.25),
         lw=0.5,
     )
+
+    diameters = np.linspace(0.1, 5, 100)
+    ax.plot(diameters, cnrsd.gunn_kinzer_velocity(diameters), "k--", lw=0.75)
 
     ax.set_xlabel("Diameter (mm)")
     ax.set_ylabel("Velocity (m/s)")
@@ -35,7 +41,7 @@ def main() -> None:
 
     fig_dirpath = Path("images")
     fig_dirpath.mkdir(exist_ok=True)
-    fig_filepath = fig_dirpath / f"{rsd.station_id}.png"
+    fig_filepath = fig_dirpath / "plot_station.png"
     fig.savefig(fig_filepath, dpi=200, bbox_inches="tight")
     plt.close(fig)
 
