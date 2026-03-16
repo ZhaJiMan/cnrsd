@@ -714,16 +714,16 @@ def lookup_class_params(
     if (class_numbers < 1).any():
         raise ValueError("class_numbers 的元素的值必须 >= 1")
 
+    max_numbers = np.where(
+        device_types, RSD_GRID_200.num_classes, RSD_GRID_100.num_classes
+    )
+    if (class_numbers > max_numbers).any():
+        raise ValueError("class_numbers 的元素的值超过了 device_types 允许的上限")
+
     class_indices = class_numbers.astype(np.intp) - 1
     class_indices[device_types.astype(np.bool_)] += RSD_GRID_100.num_classes
     class_table = _get_class_table()
-
-    try:
-        class_params = class_table[class_indices, :]  # 返回 copy
-    except IndexError as e:
-        raise ValueError(
-            "class_numbers 有元素的值超过了 device_types 允许的上限"
-        ) from e
+    class_params = class_table[class_indices, :]  # 返回 copy
 
     return ClassParams(*(class_params[..., i] for i in range(class_params.shape[-1])))
 
@@ -862,20 +862,23 @@ def build_rsd_dataarray(
         raise TypeError("class_numbers 必须是整数类型")
     if (class_numbers < 1).any():
         raise ValueError("class_numbers 的元素的值必须 >= 1")
+    rsd_grid = get_rsd_grid(device_type)
+    if (class_numbers > rsd_grid.num_classes).any():
+        raise ValueError("class_numbers 的元素的值超过了 device_type 允许的上限")
 
     # 允许 particle_numbers 是浮点数类型
     particle_numbers = np.atleast_1d(np.asarray(particle_numbers))
     if class_numbers.shape != particle_numbers.shape:
         raise ValueError("class_numbers 和 particle_numbers 的形状必须相同")
 
-    rsd_grid = get_rsd_grid(device_type)
-    class_indices = class_numbers.ravel() - 1
     coords = {
         "velocity_center": rsd_grid.velocity.centers,
         "diameter_center": rsd_grid.diameter.centers,
         "velocity_width": ("velocity_center", rsd_grid.velocity.widths),
         "diameter_width": ("diameter_center", rsd_grid.diameter.widths),
     }
+
+    class_indices = class_numbers.ravel() - 1
 
     if times is None:
         indexer = (class_indices,)
@@ -897,11 +900,9 @@ def build_rsd_dataarray(
         coords["time"] = unique_times
 
     data = np.zeros(flat_shape, dtype=particle_numbers.dtype)
-    try:
-        data[indexer] = particle_numbers.ravel()
-    except IndexError as e:
-        raise ValueError("class_numbers 有元素的值超过了 device_type 允许的上限") from e
-    da = xr.DataArray(data.reshape(grid_shape), dims=dims, coords=coords)
+    data[indexer] = particle_numbers.ravel()
+    data = data.reshape(grid_shape)
+    da = xr.DataArray(data, dims=dims, coords=coords)
 
     return da
 
