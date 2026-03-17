@@ -900,8 +900,9 @@ def build_rsd_dataarray(
         dims = ["time", "velocity_center", "diameter_center"]
         coords["time"] = unique_times
 
+    # times 或 class_numbers 重复出现时累加
     data = np.zeros(flat_shape, dtype=particle_numbers.dtype)
-    data[indexer] = particle_numbers.ravel()
+    np.add.at(data, indexer, particle_numbers.ravel())
     data = data.reshape(grid_shape)
     da = xr.DataArray(data, dims=dims, coords=coords)
 
