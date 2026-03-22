@@ -1,6 +1,6 @@
 [project]
 name = "cnrsd"
-version = "0.1.2"
+version = "0.1.3"
 description = "解析中国 BUFR 格式的雨滴谱数据"
 authors = [
     { name = "ZhaJiMan", email = "915023793@qq.com" }

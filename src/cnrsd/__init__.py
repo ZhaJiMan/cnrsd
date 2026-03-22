@@ -847,9 +847,10 @@ def resample_rsd_dataframe(
     window_flags = df.groupby(["station_id", grouper])["rain_flag"].transform("any")
     df = cast(pd.DataFrame, df[~window_flags | df["rain_flag"]])
 
+    # 会产生多级索引
     grouped = df.groupby(["station_id", grouper, "class_number"])
     agg_df = grouped.first()
-    agg_df["particle_number"] = grouped["particle_number"].sum()
+    agg_df["particle_number"] = grouped["particle_number"].sum().to_numpy()
     agg_df = agg_df.reset_index()[df.columns]
 
     return cast(pd.DataFrame, agg_df)
