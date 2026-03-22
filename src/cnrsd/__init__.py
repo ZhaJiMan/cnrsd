@@ -828,10 +828,10 @@ def resample_rsd_dataframe(
     freq : str, default: "5min"
         pandas 的时间频率字符串
 
-    closed : {"left", "right"}, default: "right"
-        重采样的时间窗口是左闭右开（"left"）还是左开右闭（"right"）
+    closed : {'left', 'right'}, default: 'right'
+        重采样的时间窗口是左闭右开（'left'）还是左开右闭（'right'）
 
-    label : {"left", "right"}, default: "right"
+    label : {'left', 'right'}, default: 'right'
         重采样的时间窗口用左端点还是右端点作为标签
 
     Returns
@@ -961,11 +961,30 @@ def mass_weighted_diameter(diameters: ArrayLike, particle_numbers: ArrayLike) ->
     return dm
 
 
-# TODO: 增加 atlas 公式
-def gunn_kinzer_velocity(diameter: ArrayLike) -> NDArray[np.float64]:
-    """计算液态雨滴的末速度。输入输出的单位是 mm 和 m/s。"""
-    diameter = np.asarray(diameter, dtype=np.float64)
-    coeffs = [-0.002362, 0.07934, -0.9551, 4.932, -0.1021]
-    velocity = np.polyval(coeffs, diameter)
+def gunn_kinzer_velocity(
+    diameter: ArrayLike, method: Literal["atlas", "brandes"] = "atlas"
+) -> NDArray[np.float64]:
+    """计算液态雨滴的末速度
 
-    return cast(NDArray[np.float64], velocity)
+    Parameters
+    ----------
+    diameter : array_like
+        雨滴直径。单位是 mm。
+
+    method : {'atlas', 'brandes'}, default: 'atlas'
+        雨滴末速度的公式。默认使用 Atlas 公式。
+
+    Returns
+    -------
+    velocity : ndarray
+        雨滴末速度。单位是 m/s。可能含有负值，需要手动处理。
+    """
+    diameter = np.asarray(diameter, dtype=np.float64)
+    match method:
+        case "atlas":
+            return 9.65 - 10.3 * np.exp(-0.6 * diameter)
+        case "brandes":
+            coeffs = [-0.002362, 0.07934, -0.9551, 4.932, -0.1021]
+            return cast(NDArray[np.float64], np.polyval(coeffs, diameter))
+        case _:
+            raise ValueError(f"{method=} 必须是 'atlas' 或 'brandes'")

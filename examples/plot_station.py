@@ -31,8 +31,9 @@ def main() -> None:
         lw=0.5,
     )
 
-    diameters = np.linspace(0.1, 5, 100)
-    ax.plot(diameters, cnrsd.gunn_kinzer_velocity(diameters), "k--", lw=0.75)
+    diameters = np.linspace(0, 5, 100)
+    velocities = cnrsd.gunn_kinzer_velocity(diameters).clip(0)
+    ax.plot(diameters, velocities, "k--", lw=0.75)
 
     ax.set_xlabel("Diameter (mm)")
     ax.set_ylabel("Velocity (m/s)")

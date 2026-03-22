@@ -1,6 +1,7 @@
 ## 0.1.3 (ongoing)
 
 - `resample_rsd_dataframe` 函数新增 `closed` 和 `label` 参数，用于控制时间窗口的开闭跟标签
+- `gunn_kinzer_velocity` 函数新增 `method` 方法，并且默认改用 Atlas 公式计算。
 
 ## 0.1.2 (2026-03-17)
 
