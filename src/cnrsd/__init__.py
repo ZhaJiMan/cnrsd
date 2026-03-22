@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     import pandas as pd
     import xarray as xr
 
-__version__ = "0.1.2"
+__version__ = "0.1.3"
 
 __all__ = [
     "RSD",
@@ -808,33 +808,49 @@ def rsds_to_dataframe(rsds: Sequence[RSD]) -> pd.DataFrame:
     return pd.DataFrame(rsds_to_dict(rsds))
 
 
-def resample_rsd_dataframe(df: pd.DataFrame, freq: str = "5min") -> pd.DataFrame:
-    """对 `RSD` 转换得到的 pandas `DataFrame` 进行时间重采样
-
-    要求 `df` 含有 `station_id`、`time`、`class_number`、`rain_flag` 和 `particle_number` 列。
-    换句话说最好应用于 `RSD.to_dataframe` 或 `rsds_to_dataframe` 的返回值。
+def resample_rsd_dataframe(
+    df: pd.DataFrame,
+    freq: str = "5min",
+    closed: Literal["left", "right"] = "right",
+    label: Literal["left", "right"] = "right",
+) -> pd.DataFrame:
+    """对 `RSD` 对象转换得到的 pandas `DataFrame` 对象进行时间重采样
 
     会按 `station_id` 和 `time` 进行分组，计算 `freq` 时间窗口内 `particle_number` 的和。
     并且能正确处理 `rain_flag=False` 的占位行。
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        `RSD` 对象转换得到的 pandas `DataFrame` 对象。
+        要求含有 `station_id`、`time`、`class_number`、`rain_flag` 和 `particle_number` 列。
+
+    freq : str, default: "5min"
+        pandas 的时间频率字符串
+
+    closed : {"left", "right"}, default: "right"
+        重采样的时间窗口是左闭右开（"left"）还是左开右闭（"right"）
+
+    label : {"left", "right"}, default: "right"
+        重采样的时间窗口用左端点还是右端点作为标签
+
+    Returns
+    -------
+    pd.DataFrame
+        重采样后的 `DataFrame` 对象
     """
     import pandas as pd
 
-    # 普通列加上时间 grouper 会自动丢弃空时间窗口
-    # 提前过滤时间窗口里占位的无雨行
-    grouper = pd.Grouper(key="time", freq=freq, closed="right", label="right")  # pyright: ignore[reportCallIssue]
+    # 普通列用 TimeGrouper 会自动丢弃空时间窗口，不会像 resample 那样填充 NaN
+    # 保留只有占位行的时间窗口，去掉同时含占位行和降雨行的窗口里的占位行
+    grouper = pd.Grouper(key="time", freq=freq, closed=closed, label=label)  # pyright: ignore[reportCallIssue]
     window_flags = df.groupby(["station_id", grouper])["rain_flag"].transform("any")
     df = cast(pd.DataFrame, df[~window_flags | df["rain_flag"]])
 
-    agg_map = {col: "first" for col in df.columns if col}
-    for col in ["station_id", "time", "class_number"]:
-        del agg_map[col]
-    agg_map["particle_number"] = "sum"
-
-    agg_df = (
-        df.groupby(["station_id", grouper, "class_number"], as_index=False)
-        .agg(agg_map)[df.columns]
-        .reset_index(drop=True)  # pyright: ignore[reportAttributeAccessIssue]
-    )
+    grouped = df.groupby(["station_id", grouper, "class_number"])
+    agg_df = grouped.first()
+    agg_df["particle_number"] = grouped["particle_number"].sum()
+    agg_df = agg_df.reset_index()[df.columns]
 
     return cast(pd.DataFrame, agg_df)
 
@@ -945,6 +961,7 @@ def mass_weighted_diameter(diameters: ArrayLike, particle_numbers: ArrayLike) ->
     return dm
 
 
+# TODO: 增加 atlas 公式
 def gunn_kinzer_velocity(diameter: ArrayLike) -> NDArray[np.float64]:
     """计算液态雨滴的末速度。输入输出的单位是 mm 和 m/s。"""
     diameter = np.asarray(diameter, dtype=np.float64)
